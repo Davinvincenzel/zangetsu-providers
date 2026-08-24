@@ -35,7 +35,7 @@ function _domains() {
 function getInfo() {
   return {
     name: 'HDHub4u', lang: 'hi', baseUrl: 'https://new2.hdhub4u.limo',
-    logo: 'https://new2.hdhub4u.limo/favicon.ico', type: 'movie', version: '1.2.2'
+    logo: 'https://new2.hdhub4u.limo/favicon.ico', type: 'movie', version: '1.2.3'
   };
 }
 
@@ -355,7 +355,10 @@ function _hubcloud(url) {
     return _get(href).then(function (doc) {
       var title = htmlText((doc.match(/<div class="card-header[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '');
       var size = htmlText((doc.match(/id=["']size["'][^>]*>([\s\S]*?)<\//) || [])[1] || '');
-      var quality = _quality(title) || '1080p';
+// No resolution in the title means we don't know it — say so rather than
+      // claiming one. The player hides its quality menu for an unknown stream
+      // instead of showing a number that isn't real.
+      var quality = _quality(title) || null;
       var info = { tags: _releaseTags(title), size: size, res: _resLabel(quality), quality: quality };
       var jobs = [], m, re = /<a[^>]*href="([^"]+)"[^>]*class="[^"]*\bbtn\b[^"]*"[^>]*>([\s\S]*?)<\/a>|<a[^>]*class="[^"]*\bbtn\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
       while ((m = re.exec(doc)) !== null) {

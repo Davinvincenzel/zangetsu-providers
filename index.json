@@ -23,7 +23,7 @@
     {
       "id": "fourkhdhub",
       "name": "4K HDHub",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "type": "movie",
       "lang": "en",
       "file": "providers/fourkhdhub.js",
@@ -41,7 +41,7 @@
     {
       "id": "hdhub4u",
       "name": "HDHub4u",
-      "version": "1.2.2",
+      "version": "1.2.3",
       "type": "movie",
       "lang": "en",
       "file": "providers/hdhub4u.js",
@@ -59,7 +59,7 @@
     {
       "id": "vegamovies",
       "name": "VegaMovies",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "type": "movie",
       "lang": "hi",
       "file": "providers/vegamovies.js",

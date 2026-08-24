@@ -29,7 +29,7 @@ function _domains() {
 function getInfo() {
   return {
     name: 'VegaMovies', lang: 'hi', baseUrl: DEFAULT_MAIN,
-    logo: DEFAULT_MAIN + '/favicon.ico', type: 'movie', version: '1.0.2'
+    logo: DEFAULT_MAIN + '/favicon.ico', type: 'movie', version: '1.0.3'
   };
 }
 
@@ -280,7 +280,10 @@ function _vcloud(url) {
     return _get(link).then(function (doc) {
       var header = htmlText((doc.match(/<div class="card-header[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '');
       var size = htmlText((doc.match(/id=["']size["'][^>]*>([\s\S]*?)<\//) || [])[1] || '');
-      var quality = _quality(header) || _quality(url) || '1080p';
+// No resolution in the title means we don't know it — say so rather than
+      // claiming one. The player hides its quality menu for an unknown stream
+      // instead of showing a number that isn't real.
+      var quality = _quality(header) || _quality(url) || null;
       var suffix = (header ? (' [' + header.replace(/\s+/g, ' ').slice(0, 60) + ']') : '')
         + (size ? ' [' + size + ']' : '');
       var jobs = [], m;

@@ -34,7 +34,7 @@ function _domains() {
 function getInfo() {
   return {
     name: '4K HDHub', lang: 'en', baseUrl: 'https://4khdhub.link',
-    logo: 'https://4khdhub.link/favicon.ico', type: 'movie', version: '1.0.4'
+    logo: 'https://4khdhub.link/favicon.ico', type: 'movie', version: '1.0.5'
   };
 }
 
@@ -325,7 +325,10 @@ function _hubcloud(url) {
       // The release filename lives in the (multi-class) card-header element.
       var title = htmlText((doc.match(/<div class="card-header[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1] || '');
       var size = htmlText((doc.match(/id=["']size["'][^>]*>([\s\S]*?)<\//) || [])[1] || '');
-      var quality = _quality(title) || '2160p';
+// No resolution in the title means we don't know it — say so rather than
+      // claiming one. The player hides its quality menu for an unknown stream
+      // instead of showing a number that isn't real.
+      var quality = _quality(title) || null;
       var info = { tags: _releaseTags(title), size: size, res: _resLabel(quality), quality: quality };
       var jobs = [], m;
       var re = /<a[^>]*href="([^"]+)"[^>]*class="[^"]*\bbtn\b[^"]*"[^>]*>([\s\S]*?)<\/a>|<a[^>]*class="[^"]*\bbtn\b[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
