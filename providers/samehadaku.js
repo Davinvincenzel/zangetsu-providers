@@ -9,12 +9,13 @@ var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 function getInfo() {
   return {
+    id: 'samehadaku',
     name: 'Samehadaku',
     lang: 'id',
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2024/07/logo-samehadaku-2.png',
     type: 'anime',
-    version: '1.0.0'
+    version: '1.0.1'
   };
 }
 
@@ -78,10 +79,24 @@ function _cleanTitle(t) {
 
 function _ensureAbsolute(u) {
   if (!u) return '';
-  if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) return u;
-  if (u.indexOf('//') === 0) return 'https:' + u;
-  if (u.indexOf('/') === 0) return SITE + u;
-  return SITE + '/' + u;
+  var s = String(u).trim();
+  if (s.indexOf('http://') === 0 || s.indexOf('https://') === 0) {
+    if (s.indexOf('/anime/') > -1 && !/\/$/.test(s)) s += '/';
+    return s;
+  }
+  if (s.indexOf('//') === 0) return 'https:' + s;
+  if (s.indexOf('/') === 0) {
+    var res = SITE + s;
+    if (res.indexOf('/anime/') > -1 && !/\/$/.test(res)) res += '/';
+    return res;
+  }
+  if (s.indexOf('anime/') === 0) {
+    var res2 = SITE + '/' + s;
+    if (!/\/$/.test(res2)) res2 += '/';
+    return res2;
+  }
+  // Bare slug like 'one-piece'
+  return SITE + '/anime/' + s.replace(/^\/+|\/+$/g, '') + '/';
 }
 
 function _unpack(code) {
@@ -235,11 +250,17 @@ function getDetail(url, opts) {
 
     // If an episode URL is passed directly, redirect to parent anime series
     if (html.indexOf('class="infoanime') === -1 && html.indexOf('class="anim-senction') === -1) {
-      var seriesMatch = html.match(/<a[^>]+class=["']series["'][^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["']/i)
-        || html.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>[\s\S]*?All Episodes/i)
-        || html.match(/<span[^>]*itemprop=["']itemListElement["'][^>]*>[\s\S]*?<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["']/i);
-      if (seriesMatch && seriesMatch[1] && seriesMatch[1] !== fullUrl) {
-        return getDetail(seriesMatch[1], opts);
+      var allEpMatch = html.match(/<div class=["']nvs nvsc["']><a\s+href=["']([^"']+)["'][^>]*>All Episode<\/a><\/div>/i)
+        || html.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>[\s\S]*?All Episode/i)
+        || html.match(/<a[^>]+class=["']series["'][^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["']/i);
+      if (allEpMatch && allEpMatch[1] && allEpMatch[1] !== fullUrl) {
+        return getDetail(allEpMatch[1], opts);
+      }
+      // Derive series slug from episode URL (e.g. /one-piece-episode-1175/ -> /anime/one-piece/)
+      var cleanSlug = fullUrl.replace(/\/$/, '').split('/').pop();
+      var seriesSlug = cleanSlug.replace(/-episode-(?:[0-9]+|movie|special|ova|end)(?:-[a-z0-9]+)*$/i, '');
+      if (seriesSlug && seriesSlug !== cleanSlug) {
+        return getDetail(SITE + '/anime/' + seriesSlug + '/', opts);
       }
     }
 
@@ -296,14 +317,26 @@ function getDetail(url, opts) {
       if (st) studios.push(st);
     }
 
+    // ── Robust Episode Extraction ────────────────────────────────────────────
     var episodes = [];
-    var epTags = html.match(/<li[^>]*>[\s\S]*?<\/li>/gi) || [];
     var seenEp = {};
-    for (var i = 0; i < epTags.length; i++) {
-      var item = epTags[i];
-      var linkMatch = item.match(/<span class=["']lchx["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
-        || item.match(/<div class=["']epsright["']><span class=["']eps["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
-        || item.match(/<a\s+href=["'](https?:\/\/[^"']*(?:episode|batch|movie)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i);
+
+    // 1. Check inside .lstepsiode / .listeps container if available
+    var block = html;
+    var containerMatch = html.match(/<div[^>]*class=["'](?:lstepsiode|listeps|episodelist)[^"']*["'][\s\S]*?<\/ul>/i)
+      || html.match(/<ul[^>]*class=["'](?:lstepsiode|listeps|episodelist)[^"']*["'][\s\S]*?<\/ul>/i);
+    if (containerMatch) {
+      block = containerMatch[0];
+    }
+
+    var rows = block.match(/<li[^>]*>[\s\S]*?<\/li>/gi)
+      || block.match(/<div class=["']epsright["'][\s\S]*?(?:<\/li>|(?=<div class=["']epsright))/gi) || [];
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var linkMatch = row.match(/<span class=["']lchx["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
+        || row.match(/<div class=["']epsright["']><span class=["']eps["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
+        || row.match(/<a\s+href=["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
 
       if (!linkMatch) continue;
       var epUrl = _ensureAbsolute(linkMatch[1]);
@@ -313,14 +346,19 @@ function getDetail(url, opts) {
         epUrl.indexOf('/genre/') > -1 ||
         epUrl.indexOf('/season/') > -1 ||
         epUrl.indexOf('/studio/') > -1 ||
+        epUrl.indexOf('/producer/') > -1 ||
         epUrl.indexOf('daftar-batch') > -1 ||
-        epUrl.indexOf('pembatas-episode') > -1
+        epUrl.indexOf('pembatas-episode') > -1 ||
+        epUrl.indexOf('facebook.com') > -1 ||
+        epUrl.indexOf('twitter.com') > -1 ||
+        epUrl.indexOf('whatsapp') > -1 ||
+        epUrl.indexOf('telegram') > -1
       ) continue;
       seenEp[epUrl] = 1;
 
       var rawEpTitle = linkMatch[2];
       var epTitle = _cleanTitle(rawEpTitle);
-      var dateMatch = item.match(/<span class=["']date["'][^>]*>([^<]+)<\/span>/i);
+      var dateMatch = row.match(/<span class=["']date["'][^>]*>([^<]+)<\/span>/i);
       var rawDate = dateMatch ? dateMatch[1] : '';
       var epDate = rawDate ? (typeof htmlText === 'function' ? htmlText(rawDate) : _decodeEntities(rawDate)) : null;
 
@@ -334,6 +372,21 @@ function getDetail(url, opts) {
         url: epUrl,
         date: epDate
       });
+    }
+
+    // 2. Fallback for single movie/special anime pages
+    if (episodes.length === 0) {
+      var playerLink = html.match(/<a[^>]+href=["'](https?:\/\/[^"']*(?:movie|special|episode)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i);
+      if (playerLink && playerLink[1] && playerLink[1].indexOf('/anime/') === -1) {
+        var singleUrl = _ensureAbsolute(playerLink[1]);
+        episodes.push({
+          id: singleUrl,
+          number: 1,
+          title: _cleanTitle(playerLink[2]) || 'Full Movie',
+          url: singleUrl,
+          date: null
+        });
+      }
     }
 
     episodes.sort(function (a, b) { return a.number - b.number; });
