@@ -9,7 +9,6 @@ var SOURCE_ID = 'allanime';
 
 // Apollo Persisted Query sha256 hash for episode sourceUrls / tobeparsed query
 var SOURCES_HASH = 'f4662f4b7510b26795dd53ef824a0bf1740fbbc5d1273fab18222ac831bca8d0';
-var SOURCES_HASH_FALLBACK = '50193c20a60c7a416666ffb41f5b6660c398ed979655842074dd1c510a5962e1';
 
 // Dynamic Key Derivation constants
 var MASK_HEX = '522db8a067d8ea23616f7670788574dd786af7ffffd27bccfaeccfde57a67ce7';
@@ -28,80 +27,294 @@ function decodeSourceUrl(s) {
 }
 globalThis.__allanimeDecodeSourceUrl = decodeSourceUrl; // test hook
 
-// ── WebCrypto / AES-GCM Helpers ─────────────────────────────────────────────
+// ── Pure JS Cryptographic Engine (Zero Dependency, Works Everywhere) ─────────
 
-function _getSubtleCrypto() {
-  if (typeof globalThis !== 'undefined' && globalThis.crypto && globalThis.crypto.subtle) {
-    return globalThis.crypto.subtle;
+function _sha256BytesPure(input) {
+  var bytes = [];
+  if (typeof input === 'string') {
+    for (var i = 0; i < input.length; i++) {
+      var c = input.charCodeAt(i);
+      if (c < 128) bytes.push(c);
+      else if (c < 2048) bytes.push((c >> 6) | 192, (c & 63) | 128);
+      else if ((c & 0xFC00) === 0xD800 && i + 1 < input.length && (input.charCodeAt(i + 1) & 0xFC00) === 0xDC00) {
+        var cp = 0x10000 + ((c & 0x3FF) << 10) + (input.charCodeAt(++i) & 0x3FF);
+        bytes.push((cp >> 18) | 240, ((cp >> 12) & 63) | 128, ((cp >> 6) & 63) | 128, (cp & 63) | 128);
+      } else bytes.push((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128);
+    }
+  } else {
+    for (var j = 0; j < input.length; j++) bytes.push(input[j]);
   }
-  return null;
+
+  var K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+  ];
+
+  var H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+
+  var l = bytes.length;
+  bytes.push(0x80);
+  while ((bytes.length % 64) !== 56) bytes.push(0);
+  var bits = l * 8;
+  for (var b = 7; b >= 0; b--) bytes.push((bits / Math.pow(2, b * 8)) & 0xff);
+
+  var W = new Array(64);
+  for (var chunk = 0; chunk < bytes.length; chunk += 64) {
+    for (var t = 0; t < 16; t++) {
+      W[t] = (bytes[chunk + t * 4] << 24) | (bytes[chunk + t * 4 + 1] << 16) | (bytes[chunk + t * 4 + 2] << 8) | (bytes[chunk + t * 4 + 3]);
+    }
+    for (var t2 = 16; t2 < 64; t2++) {
+      var s0 = ((W[t2-15] >>> 7) | (W[t2-15] << 25)) ^ ((W[t2-15] >>> 18) | (W[t2-15] << 14)) ^ (W[t2-15] >>> 3);
+      var s1 = ((W[t2-2] >>> 17) | (W[t2-2] << 15)) ^ ((W[t2-2] >>> 19) | (W[t2-2] << 13)) ^ (W[t2-2] >>> 10);
+      W[t2] = (W[t2-16] + s0 + W[t2-7] + s1) | 0;
+    }
+
+    var a = H[0], b2 = H[1], c2 = H[2], d2 = H[3], e2 = H[4], f2 = H[5], g2 = H[6], h2 = H[7];
+    for (var i2 = 0; i2 < 64; i2++) {
+      var S1 = ((e2 >>> 6) | (e2 << 26)) ^ ((e2 >>> 11) | (e2 << 21)) ^ ((e2 >>> 25) | (e2 << 7));
+      var ch = (e2 & f2) ^ ((~e2) & g2);
+      var temp1 = (h2 + S1 + ch + K[i2] + W[i2]) | 0;
+      var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      var maj = (a & b2) ^ (a & c2) ^ (b2 & c2);
+      var temp2 = (S0 + maj) | 0;
+
+      h2 = g2; g2 = f2; f2 = e2; e2 = (d2 + temp1) | 0;
+      d2 = c2; c2 = b2; b2 = a; a = (temp1 + temp2) | 0;
+    }
+    H[0] = (H[0] + a) | 0; H[1] = (H[1] + b2) | 0; H[2] = (H[2] + c2) | 0; H[3] = (H[3] + d2) | 0;
+    H[4] = (H[4] + e2) | 0; H[5] = (H[5] + f2) | 0; H[6] = (H[6] + g2) | 0; H[7] = (H[7] + h2) | 0;
+  }
+
+  var out = new Uint8Array(32);
+  for (var k = 0; k < 8; k++) {
+    out[k * 4] = (H[k] >>> 24) & 0xff;
+    out[k * 4 + 1] = (H[k] >>> 16) & 0xff;
+    out[k * 4 + 2] = (H[k] >>> 8) & 0xff;
+    out[k * 4 + 3] = H[k] & 0xff;
+  }
+  return out;
 }
 
 function _sha256Bytes(data) {
-  var subtle = _getSubtleCrypto();
-  if (subtle) {
-    var raw = (typeof data === 'string') ? new TextEncoder().encode(data) : data;
-    return subtle.digest('SHA-256', raw).then(function (buf) {
-      return new Uint8Array(buf);
+  if (typeof sha256Hex === 'function' && typeof data === 'string') {
+    return sha256Hex(data).then(function (hex) {
+      return _hexToBytes(hex);
+    }).catch(function () {
+      return _sha256BytesPure(data);
     });
   }
-  if (typeof require !== 'undefined') {
-    var c = require('crypto');
-    var hash = c.createHash('sha256').update(data).digest();
-    return Promise.resolve(new Uint8Array(hash));
+  return Promise.resolve(_sha256BytesPure(data));
+}
+
+var _SBOX = [
+  99,124,119,123,242,107,111,197,48,1,103,43,254,215,171,118,202,130,201,125,250,89,71,
+  240,173,212,162,175,156,164,114,192,183,253,147,38,54,63,247,204,52,165,229,241,113,216,49,21,
+  4,199,35,195,24,150,5,154,7,18,128,226,235,39,178,117,9,131,44,26,27,110,90,160,
+  82,59,214,179,41,227,47,132,83,209,0,237,32,252,177,91,106,203,190,57,74,76,88,207,
+  208,239,170,251,67,77,51,133,69,249,2,127,80,60,159,168,81,163,64,143,146,157,56,245,
+  188,182,218,33,16,255,243,210,205,12,19,236,95,151,68,23,196,167,126,61,100,93,25,115,
+  96,129,79,220,34,42,144,136,70,238,184,20,222,94,11,219,224,50,58,10,73,6,36,92,
+  194,211,172,98,145,149,228,121,231,200,55,109,141,213,78,169,108,86,244,234,101,122,174,8,
+  186,120,37,46,28,166,180,198,232,221,116,31,75,189,139,138,112,62,181,102,72,3,246,14,
+  97,53,87,185,134,193,29,158,225,248,152,17,105,217,142,148,155,30,135,233,206,85,40,223,
+  140,161,137,13,191,230,66,104,65,153,45,15,176,84,187,22
+];
+
+var _RCON = [0x00,0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1b,0x36];
+
+function _keyExpansion(key) {
+  var Nk = key.length / 4;
+  var Nr = Nk + 6;
+  var w = [];
+  for (var i = 0; i < Nk; i++) {
+    w[i] = [(key[4*i]), (key[4*i+1]), (key[4*i+2]), (key[4*i+3])];
   }
-  return Promise.reject(new Error('AllAnime: crypto digest unavailable'));
+  for (var col = Nk; col < 4 * (Nr + 1); col++) {
+    var temp = w[col - 1].slice();
+    if (col % Nk === 0) {
+      var k0 = temp[0]; temp[0] = temp[1]; temp[1] = temp[2]; temp[2] = temp[3]; temp[3] = k0;
+      temp[0] = _SBOX[temp[0]]; temp[1] = _SBOX[temp[1]]; temp[2] = _SBOX[temp[2]]; temp[3] = _SBOX[temp[3]];
+      temp[0] ^= _RCON[col / Nk];
+    } else if (Nk > 6 && col % Nk === 4) {
+      temp[0] = _SBOX[temp[0]]; temp[1] = _SBOX[temp[1]]; temp[2] = _SBOX[temp[2]]; temp[3] = _SBOX[temp[3]];
+    }
+    w[col] = [
+      w[col - Nk][0] ^ temp[0],
+      w[col - Nk][1] ^ temp[1],
+      w[col - Nk][2] ^ temp[2],
+      w[col - Nk][3] ^ temp[3]
+    ];
+  }
+  return { w: w, Nr: Nr };
+}
+
+function _cipherBlock(block, ks) {
+  var w = ks.w, Nr = ks.Nr, s = [[],[],[],[]], r, c, i;
+  for (i = 0; i < 16; i++) s[i % 4][(i / 4) | 0] = block[i];
+
+  function ark(round) {
+    for (c = 0; c < 4; c++) for (r = 0; r < 4; r++) s[r][c] ^= w[round * 4 + c][r];
+  }
+  function sub() {
+    for (r = 0; r < 4; r++) for (c = 0; c < 4; c++) s[r][c] = _SBOX[s[r][c]];
+  }
+  function shift() {
+    for (r = 1; r < 4; r++) {
+      var row = s[r].slice();
+      for (c = 0; c < 4; c++) s[r][c] = row[(c + r) % 4];
+    }
+  }
+  function gmul2(x) { return (x << 1) ^ (((x >> 7) & 1) * 0x11b); }
+  function gmul3(x) { return gmul2(x) ^ x; }
+  function mix() {
+    for (c = 0; c < 4; c++) {
+      var a0 = s[0][c], a1 = s[1][c], a2 = s[2][c], a3 = s[3][c];
+      s[0][c] = gmul2(a0) ^ gmul3(a1) ^ a2 ^ a3;
+      s[1][c] = a0 ^ gmul2(a1) ^ gmul3(a2) ^ a3;
+      s[2][c] = a0 ^ a1 ^ gmul2(a2) ^ gmul3(a3);
+      s[3][c] = gmul3(a0) ^ a1 ^ a2 ^ gmul2(a3);
+    }
+  }
+
+  ark(0);
+  for (var round = 1; round < Nr; round++) {
+    sub(); shift(); mix(); ark(round);
+  }
+  sub(); shift(); ark(Nr);
+
+  var out = new Uint8Array(16);
+  for (i = 0; i < 16; i++) out[i] = s[i % 4][(i / 4) | 0];
+  return out;
+}
+
+function _aesCtrCrypt(key, iv12, data, initialCounter) {
+  var ks = _keyExpansion(key);
+  var out = new Uint8Array(data.length);
+  var cb = new Uint8Array(16);
+  cb.set(iv12, 0);
+
+  var counter = initialCounter || 2;
+  var off = 0;
+  while (off < data.length) {
+    cb[12] = (counter >>> 24) & 0xff;
+    cb[13] = (counter >>> 16) & 0xff;
+    cb[14] = (counter >>> 8) & 0xff;
+    cb[15] = counter & 0xff;
+    counter++;
+
+    var mask = _cipherBlock(cb, ks);
+    var blockSize = Math.min(16, data.length - off);
+    for (var i = 0; i < blockSize; i++) {
+      out[off + i] = data[off + i] ^ mask[i];
+    }
+    off += blockSize;
+  }
+  return out;
+}
+
+function _ghash(H, data, aad) {
+  aad = aad || new Uint8Array(0);
+  var v = new Uint32Array(4);
+  var h = new Uint32Array(4);
+  for (var i = 0; i < 4; i++) {
+    h[i] = (H[i*4] << 24) | (H[i*4+1] << 16) | (H[i*4+2] << 8) | (H[i*4+3]);
+  }
+
+  function mulBlock(x, block) {
+    for (var j = 0; j < 4; j++) {
+      x[j] ^= (block[j*4] << 24) | (block[j*4+1] << 16) | (block[j*4+2] << 8) | (block[j*4+3]);
+    }
+    var z = new Uint32Array(4);
+    var vCur = new Uint32Array(h);
+    for (var b = 0; b < 128; b++) {
+      var word = (b / 32) | 0;
+      var bit = 31 - (b % 32);
+      if ((x[word] >>> bit) & 1) {
+        z[0] ^= vCur[0]; z[1] ^= vCur[1]; z[2] ^= vCur[2]; z[3] ^= vCur[3];
+      }
+      var lsb = vCur[3] & 1;
+      vCur[3] = (vCur[3] >>> 1) | (vCur[2] << 31);
+      vCur[2] = (vCur[2] >>> 1) | (vCur[1] << 31);
+      vCur[1] = (vCur[1] >>> 1) | (vCur[0] << 31);
+      vCur[0] = (vCur[0] >>> 1);
+      if (lsb) vCur[0] ^= 0xe1000000;
+    }
+    x[0] = z[0]; x[1] = z[1]; x[2] = z[2]; x[3] = z[3];
+  }
+
+  var padded = [];
+  for (var a = 0; a < aad.length; a++) padded.push(aad[a]);
+  while (padded.length % 16 !== 0) padded.push(0);
+  for (var d = 0; d < data.length; d++) padded.push(data[d]);
+  while (padded.length % 16 !== 0) padded.push(0);
+
+  var aadBits = aad.length * 8;
+  var dataBits = data.length * 8;
+  var lenBlock = new Uint8Array(16);
+  lenBlock[4] = (aadBits >>> 24) & 0xff; lenBlock[5] = (aadBits >>> 16) & 0xff; lenBlock[6] = (aadBits >>> 8) & 0xff; lenBlock[7] = aadBits & 0xff;
+  lenBlock[12] = (dataBits >>> 24) & 0xff; lenBlock[13] = (dataBits >>> 16) & 0xff; lenBlock[14] = (dataBits >>> 8) & 0xff; lenBlock[15] = dataBits & 0xff;
+
+  for (var p = 0; p < padded.length; p += 16) {
+    mulBlock(v, padded.slice(p, p + 16));
+  }
+  mulBlock(v, lenBlock);
+
+  var tag = new Uint8Array(16);
+  for (var t = 0; t < 4; t++) {
+    tag[t*4] = (v[t] >>> 24) & 0xff;
+    tag[t*4+1] = (v[t] >>> 16) & 0xff;
+    tag[t*4+2] = (v[t] >>> 8) & 0xff;
+    tag[t*4+3] = v[t] & 0xff;
+  }
+  return tag;
 }
 
 function _aesGcmEncrypt(keyBytes, ivBytes, plainText) {
-  var subtle = _getSubtleCrypto();
-  if (subtle) {
-    var data = new TextEncoder().encode(plainText);
-    return subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt'])
-      .then(function (k) {
-        return subtle.encrypt({ name: 'AES-GCM', iv: ivBytes }, k, data);
-      })
-      .then(function (cipherBuf) {
-        var ct = new Uint8Array(cipherBuf);
-        var out = new Uint8Array(1 + ivBytes.length + ct.length);
-        out[0] = 0x01;
-        out.set(ivBytes, 1);
-        out.set(ct, 1 + ivBytes.length);
-        return _bytesToBase64(out);
-      });
+  var raw = [];
+  for (var i = 0; i < plainText.length; i++) {
+    var c = plainText.charCodeAt(i);
+    if (c < 128) raw.push(c);
+    else if (c < 2048) raw.push((c >> 6) | 192, (c & 63) | 128);
+    else raw.push((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128);
   }
-  if (typeof require !== 'undefined') {
-    var c = require('crypto');
-    var cipher = c.createCipheriv('aes-256-gcm', Buffer.from(keyBytes), Buffer.from(ivBytes));
-    var ctBuf = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
-    var tagBuf = cipher.getAuthTag();
-    var outBuf = Buffer.concat([Buffer.from([0x01]), Buffer.from(ivBytes), ctBuf, tagBuf]);
-    return Promise.resolve(outBuf.toString('base64'));
-  }
-  return Promise.reject(new Error('AllAnime: AES-GCM encrypt unavailable'));
+  var rawBytes = new Uint8Array(raw);
+  var ks = _keyExpansion(keyBytes);
+  var H = _cipherBlock(new Uint8Array(16), ks);
+  var ct = _aesCtrCrypt(keyBytes, ivBytes, rawBytes, 2);
+
+  var j0 = new Uint8Array(16);
+  j0.set(ivBytes, 0); j0[15] = 1;
+  var ek0 = _cipherBlock(j0, ks);
+
+  var ghashTag = _ghash(H, ct);
+  var tag = new Uint8Array(16);
+  for (var k = 0; k < 16; k++) tag[k] = ghashTag[k] ^ ek0[k];
+
+  var out = new Uint8Array(1 + 12 + ct.length + 16);
+  out[0] = 0x01;
+  out.set(ivBytes, 1);
+  out.set(ct, 13);
+  out.set(tag, 13 + ct.length);
+  return Promise.resolve(_bytesToBase64(out));
 }
 
 function _aesGcmDecrypt(keyBytes, nonceBytes, cipherWithTag) {
-  var subtle = _getSubtleCrypto();
-  if (subtle) {
-    return subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt'])
-      .then(function (k) {
-        return subtle.decrypt({ name: 'AES-GCM', iv: nonceBytes }, k, cipherWithTag);
-      })
-      .then(function (plainBuf) {
-        return new TextDecoder().decode(plainBuf);
-      });
+  var ct = cipherWithTag.slice(0, cipherWithTag.length - 16);
+  var pt = _aesCtrCrypt(keyBytes, nonceBytes, ct, 2);
+  var str = '';
+  for (var i = 0; i < pt.length; i++) {
+    var c = pt[i];
+    if (c < 128) str += String.fromCharCode(c);
+    else if (c > 191 && c < 224) { str += String.fromCharCode(((c & 31) << 6) | (pt[++i] & 63)); }
+    else { str += String.fromCharCode(((c & 15) << 12) | ((pt[++i] & 63) << 6) | (pt[++i] & 63)); }
   }
-  if (typeof require !== 'undefined') {
-    var c = require('crypto');
-    var tag = cipherWithTag.slice(cipherWithTag.length - 16);
-    var ciphertext = cipherWithTag.slice(0, cipherWithTag.length - 16);
-    var decipher = c.createDecipheriv('aes-256-gcm', Buffer.from(keyBytes), Buffer.from(nonceBytes));
-    decipher.setAuthTag(Buffer.from(tag));
-    var plain = Buffer.concat([decipher.update(Buffer.from(ciphertext)), decipher.final()]);
-    return Promise.resolve(plain.toString('utf8'));
-  }
-  return Promise.reject(new Error('AllAnime: AES-GCM decrypt unavailable'));
+  return Promise.resolve(str);
 }
 
 function _bytesToBase64(bytes) {
