@@ -14,7 +14,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '1.0.7'
+    version: '1.0.8'
   };
 }
 
@@ -74,19 +74,22 @@ function _b64Decode(b64) {
 
 function _unpack(code) {
   try {
-    var m = code.match(/}\s*\(\s*["']([\s\S]*?)["']\s*,\s*(\d+)\s*,\s*["']([\s\S]*?)["']\.split\(/);
-    if (!m) return '';
-    var payload = m[1];
-    var radix = parseInt(m[2], 10);
-    var count = parseInt(m[3], 10);
-    var keywords = m[4].split('|');
+    var match = code.match(/eval\s*\(\s*function\s*\([^\)]*\)\s*\{[\s\S]*?\}\s*\(\s*['"]([\s\S]*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([\s\S]*?)['"]\s*\.split\(/i)
+      || code.match(/}\s*\(\s*['"]([\s\S]*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([\s\S]*?)['"]\s*\.split\(/i);
+    if (!match) return '';
+    var payload = match[1];
+    var radix = parseInt(match[2], 10);
+    var count = parseInt(match[3], 10);
+    var symtab = match[4].split('|');
+
     var encode = function (c) {
       return (c < radix ? '' : encode(Math.floor(c / radix))) +
         ((c = c % radix) > 35 ? String.fromCharCode(c + 29) : c.toString(36));
     };
+
     for (var i = count; i--; ) {
-      if (keywords[i]) {
-        payload = payload.replace(new RegExp('\\b' + encode(i) + '\\b', 'g'), keywords[i]);
+      if (symtab[i]) {
+        payload = payload.replace(new RegExp('\\b' + encode(i) + '\\b', 'g'), symtab[i]);
       }
     }
     return payload;
@@ -261,12 +264,23 @@ function _extractFromEmbed(embedUrl, ref, timeoutMs, depth) {
       if (!sUrl) return;
       sUrl = sUrl.replace(/\\/g, '').trim();
       if (sUrl.indexOf('http') !== 0 || sUrl.indexOf('novideo') > -1) return;
-      var isHls = /\.m3u8(\?|$)/i.test(sUrl);
+      var isHls = /\.m3u8(\?|$)/i.test(sUrl) || /\/hls[23]?\//i.test(sUrl);
+      var isGvideo = /googlevideo\.com/i.test(sUrl);
+      var isArchive = /archive\.org/i.test(sUrl);
+
+      // Clean headers so mobile ExoPlayer/AVPlayer do not receive 403 Forbidden
+      var streamHeaders = { 'User-Agent': UA };
+      if (isGvideo) {
+        streamHeaders['Referer'] = 'https://www.blogger.com/';
+      } else if (!isArchive) {
+        streamHeaders['Referer'] = embedUrl;
+      }
+
       out.push({
         url: sUrl,
         quality: q || '720p',
         container: isHls ? 'hls' : 'mp4',
-        headers: { 'User-Agent': UA, 'Referer': embedUrl },
+        headers: streamHeaders,
         kind: 'sub',
         audioLang: 'ja'
       });
@@ -277,7 +291,7 @@ function _extractFromEmbed(embedUrl, ref, timeoutMs, depth) {
       || html.match(/videoURL\s*=\s*["']([^"']+)["']/i)
       || html.match(/<source[^>]+src=["']([^"']+)["']/i)
       || html.match(/file\s*:\s*["'](https?:[^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
-      || html.match(/src\s*:\s*["'](https?:[^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
+      || html.match(/src\s*:\s*["'](https?:[^\"']+\.(?:mp4|m3u8)[^\"']*)[\"']/i)
       || html.match(/player\.src\(\s*\{[^}]*src:\s*["']([^"']+)["']/i)
       || html.match(/property=["']og:video["']\s+content=["']([^"']+)["']/i)
       || html.match(/<video[^>]+src=["']([^"']+)["']/i);
@@ -287,11 +301,12 @@ function _extractFromEmbed(embedUrl, ref, timeoutMs, depth) {
       return out;
     }
 
-    // 2. Packed JS evaluation (Vidhide, Streamwish, etc.)
+    // 2. Packed JS evaluation (VidHide, StreamWish, etc.)
     if (html.indexOf('eval(') > -1) {
       var unpacked = _unpack(html);
       if (unpacked) {
         var m3u8Match = unpacked.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i)
+          || unpacked.match(/https?:\/\/[^"'\s`\\]+\/hls[23]?\/[^"'\s`\\]*/i)
           || unpacked.match(/file\s*:\s*["']([^"']+\.(?:m3u8|mp4)[^"']*)["']/i);
         if (m3u8Match) {
           addStream(m3u8Match[1] || m3u8Match[0]);
@@ -348,10 +363,11 @@ function _resolveFallbackMirrors(epHtml, episodeUrl) {
         var isYu = name.indexOf('yourupload') > -1;
         var isMp4 = name.indexOf('mp4load') > -1 || name.indexOf('mp4upload') > -1;
 
-        if (isOndesu || isVidhide || isYu || isMp4) {
+        if (isVidhide || isOndesu || isYu || isMp4) {
           var score = 0;
-          if (isOndesu) score += 40;
-          if (isVidhide) score += 25;
+          // VidHide HLS is universal across mobile players
+          if (isVidhide) score += 35;
+          if (isOndesu) score += 30;
           if (isYu) score += 20;
           if (isMp4) score += 15;
           if (is720) score += 10;
@@ -363,7 +379,7 @@ function _resolveFallbackMirrors(epHtml, episodeUrl) {
 
       candidates.sort(function (a, b) { return b.score - a.score; });
 
-      // Deduplicate by quality + provider
+      // Deduplicate by quality + provider, collect up to 3 diverse mirrors
       var selected = [];
       var seenQualities = {};
       for (var i = 0; i < candidates.length; i++) {
@@ -375,7 +391,7 @@ function _resolveFallbackMirrors(epHtml, episodeUrl) {
         if (!seenQualities[key]) {
           seenQualities[key] = 1;
           selected.push(c);
-          if (selected.length >= 2) break;
+          if (selected.length >= 3) break;
         }
       }
 
