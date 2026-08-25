@@ -1,9 +1,10 @@
-// Otakudesu — Indonesian anime provider for Zangetsu (otakudesu.blog).
+// Otakudesu — High-Performance Indonesian Anime Provider for Zangetsu (otakudesu.blog)
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
   ? String(__SOURCE_ID) : 'otakudesu';
 
-var SITE = 'https://otakudesu.blog';
+var DOMAINS = ['https://otakudesu.blog', 'https://otakudesu.cloud', 'https://otakudesu.best'];
+var SITE = DOMAINS[0];
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
@@ -14,18 +15,18 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '1.0.1'
+    version: '1.0.2'
   };
 }
 
-function _get(url, ref) {
+function _get(url, ref, timeoutMs) {
   var h = { 'User-Agent': UA, 'Referer': ref || SITE + '/' };
-  return fetch(url, { headers: h })
+  return fetch(url, { headers: h, timeoutMs: timeoutMs || 5000 })
     .then(function (r) { return r.body || ''; })
     .catch(function () { return ''; });
 }
 
-function _post(url, data, ref) {
+function _post(url, data, ref, timeoutMs) {
   var h = {
     'User-Agent': UA,
     'Referer': ref || SITE + '/',
@@ -44,7 +45,7 @@ function _post(url, data, ref) {
     }
     body = pairs.join('&');
   }
-  return fetch(url, { method: 'POST', headers: h, body: body })
+  return fetch(url, { method: 'POST', headers: h, body: body, timeoutMs: timeoutMs || 3500 })
     .then(function (r) {
       var j;
       try { j = JSON.parse(r.body || 'null'); } catch (e) { j = null; }
@@ -60,17 +61,20 @@ function _cleanTitle(t) {
     .trim();
 }
 
-function _b64Decode(str) {
-  try {
-    if (typeof atob === 'function') return atob(str);
-    if (typeof Buffer !== 'undefined') return Buffer.from(str, 'base64').toString('utf8');
-    var bytes = globalThis.base64ToBytes(str);
-    var res = '';
-    for (var i = 0; i < bytes.length; i++) res += String.fromCharCode(bytes[i]);
-    return res;
-  } catch (e) {
-    return '';
+function _b64Decode(b64) {
+  if (typeof atob === 'function') {
+    return atob(b64);
   }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(b64, 'base64').toString('utf8');
+  }
+  var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  var str = String(b64).replace(/[=]+$/, '');
+  var out = '';
+  for (var bc = 0, bs = 0, buffer, i = 0; (buffer = str.charAt(i++)); ~buffer && (bs = bc % 4 ? bs * 64 + buffer : buffer, bc++ % 4) ? out += String.fromCharCode(255 & bs >> (-2 * bc & 6)) : 0) {
+    buffer = chars.indexOf(buffer);
+  }
+  return out;
 }
 
 function _unpack(code) {
@@ -101,7 +105,7 @@ function search(query, page, opts) {
   var q = String(query || '').trim();
   if (q.length < 1) return Promise.resolve([]);
   var url = SITE + '/?s=' + encodeURIComponent(q) + '&post_type=anime';
-  return _get(url, SITE + '/').then(function (html) {
+  return _get(url, SITE + '/', 5000).then(function (html) {
     var out = [], seen = {};
     var chunks = html.split('<ul class="chivsrc">');
     if (chunks.length < 2) return [];
@@ -132,7 +136,7 @@ function search(query, page, opts) {
 
 // ── Home ─────────────────────────────────────────────────────────────────────
 function getHome(opts) {
-  return _get(SITE + '/', SITE + '/').then(function (html) {
+  return _get(SITE + '/', SITE + '/', 5000).then(function (html) {
     var sections = html.split(/<div class=["']venz["']>/i);
     var out = [];
     for (var i = 1; i < sections.length; i++) {
@@ -173,7 +177,7 @@ function getHome(opts) {
 // ── Detail & Episodes ────────────────────────────────────────────────────────
 function getDetail(url, opts) {
   var aurl = String(url);
-  return _get(aurl, SITE + '/').then(function (html) {
+  return _get(aurl, SITE + '/', 6000).then(function (html) {
     var title = _cleanTitle(
       (html.match(/<b>Judul<\/b>\s*:\s*([^<]+)/i) || [])[1]
       || (html.match(/<div class="infozingle">[\s\S]*?<b>Judul<\/b>\s*:\s*([^<]+)/i) || [])[1]
@@ -249,9 +253,9 @@ function getEpisodes(url, opts) {
 }
 
 // ── Stream Extraction ────────────────────────────────────────────────────────
-function _extractFromEmbed(embedUrl, ref) {
+function _extractFromEmbed(embedUrl, ref, timeoutMs) {
   if (!embedUrl) return Promise.resolve([]);
-  return _get(embedUrl, ref || SITE + '/').then(function (html) {
+  return _get(embedUrl, ref || SITE + '/', timeoutMs || 3000).then(function (html) {
     if (!html) return [];
     var out = [];
 
@@ -276,11 +280,11 @@ function _extractFromEmbed(embedUrl, ref) {
       });
     };
 
-    // 1. Direct video file match
-    var fileMatch = html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
+    // 1. Direct video source or file URL
+    var fileMatch = html.match(/<source[^>]+src="([^"]+)"/i)
+      || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
       || html.match(/videoURL\s*=\s*["']([^"']+)["']/i)
       || html.match(/src\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
-      || html.match(/<source[^>]+src="([^"]+)"/i)
       || html.match(/<video[^>]+src="([^"]+)"/i);
 
     if (fileMatch) {
@@ -299,20 +303,29 @@ function _extractFromEmbed(embedUrl, ref) {
       }
     }
 
-    // 3. Nested iframe (e.g. Blogger or another player inside Desustream)
-    var innerIfr = (html.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
-    if (innerIfr && innerIfr !== embedUrl) {
-      return _extractFromEmbed(innerIfr, embedUrl).then(function (nested) {
-        return out.concat(nested);
-      });
-    }
-
     return out;
   }).catch(function () { return []; });
 }
 
+function _settleWithDeadline(jobs, deadlineMs) {
+  return new Promise(function (resolve) {
+    var results = [];
+    var pending = jobs.length;
+    var done = false;
+    function finish() { if (!done) { done = true; resolve(results); } }
+    if (pending === 0) { resolve(results); return; }
+    for (var i = 0; i < jobs.length; i++) {
+      Promise.resolve(jobs[i])
+        .then(function (arr) { if (arr && arr.length) results = results.concat(arr); })
+        .catch(function () {})
+        .then(function () { pending -= 1; if (pending === 0) finish(); });
+    }
+    setTimeout(finish, deadlineMs);
+  });
+}
+
 function getVideoSources(episodeUrl) {
-  return _get(episodeUrl, SITE + '/').then(function (epHtml) {
+  return _get(episodeUrl, SITE + '/', 4500).then(function (epHtml) {
     if (!epHtml) return Promise.reject(new Error('Otakudesu: episode page not found'));
     var sources = [], seenUrls = {};
 
@@ -323,74 +336,97 @@ function getVideoSources(episodeUrl) {
       }
     };
 
-    // 1. Fast parallel fetch: Main iframe embed
+    var jobs = [];
+
+    // 1. Immediate Main Iframe extraction
     var mainIfr = (epHtml.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
-    var pMain = mainIfr ? _extractFromEmbed(mainIfr, episodeUrl) : Promise.resolve([]);
+    if (mainIfr) {
+      jobs.push(_extractFromEmbed(mainIfr, episodeUrl, 3000));
+    }
 
-    // 2. Fast parallel fetch: Top mirrors (up to 3) via AJAX
+    // 2. Concurrently extract top 720p & 480p fast streaming mirrors (vidhide, ondesu, desustream, yourupload, etc.)
     var nonceActions = epHtml.match(/action:\s*"([a-f0-9]{32})"/g) || [];
-    var pMirrors = Promise.resolve([]);
-
     if (nonceActions.length >= 2) {
       var streamAction = (nonceActions[0].match(/"([a-f0-9]{32})"/) || [])[1];
       var nonceAction = (nonceActions[1].match(/"([a-f0-9]{32})"/) || [])[1];
 
-      pMirrors = _post(SITE + '/wp-admin/admin-ajax.php', { action: nonceAction }, episodeUrl)
+      var pMirrors = _post(SITE + '/wp-admin/admin-ajax.php', { action: nonceAction }, episodeUrl, 2500)
         .then(function (nonceRes) {
           var nonce = nonceRes && nonceRes.data;
           if (!nonce) return [];
 
           var mirrorLinks = epHtml.match(/<a[^>]+data-content="([^"]+)"[^>]*>([^<]+)<\/a>/g) || [];
-          var mirrorTasks = [];
+          var candidates = [];
 
-          var fetchOneMirror = function (linkTag) {
+          for (var m = 0; m < mirrorLinks.length; m++) {
+            var linkTag = mirrorLinks[m];
             var contentB64 = (linkTag.match(/data-content="([^"]+)"/) || [])[1];
-            if (!contentB64) return Promise.resolve([]);
-            var decodedJson = _b64Decode(contentB64);
+            if (!contentB64) continue;
+            var decoded = _b64Decode(contentB64);
             var parsed;
-            try { parsed = JSON.parse(decodedJson); } catch (e) { parsed = null; }
-            if (!parsed) return Promise.resolve([]);
+            try { parsed = JSON.parse(decoded); } catch (e) { parsed = null; }
+            if (!parsed) continue;
 
-            var payload = { id: parsed.id, i: parsed.i, q: parsed.q, nonce: nonce, action: streamAction };
-            return _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl).then(function (sRes) {
-              if (!sRes || !sRes.data) return [];
-              var htmlBlock = _b64Decode(sRes.data);
-              var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
-              if (!ifrSrc) return [];
+            var name = ((linkTag.match(/>([^<]+)<\/a>/) || [])[1] || '').trim().toLowerCase();
+            var q = parsed.q || '';
+            var is720 = q.indexOf('720') > -1 || q.indexOf('1080') > -1;
+            var is480 = q.indexOf('480') > -1;
 
-              return _extractFromEmbed(ifrSrc, episodeUrl).then(function (mSources) {
-                for (var k = 0; k < mSources.length; k++) {
-                  if (parsed.q) mSources[k].quality = parsed.q;
-                }
-                return mSources;
-              });
-            }).catch(function () { return []; });
-          };
-
-          for (var m = 0; m < Math.min(mirrorLinks.length, 3); m++) {
-            mirrorTasks.push(fetchOneMirror(mirrorLinks[m]));
+            // Prioritize fast video streaming hosts, filter out non-stream storage (mega, filedon, gdrive)
+            if (name.indexOf('vidhide') > -1 || name.indexOf('ondesu') > -1 || name.indexOf('otaku') > -1 || name.indexOf('desu') > -1 || name.indexOf('yourupload') > -1 || name.indexOf('mp4') > -1) {
+              var isVidhide = name.indexOf('vidhide') > -1;
+              candidates.push({ parsed: parsed, is720: is720, is480: is480, isVidhide: isVidhide });
+            }
           }
 
-          return Promise.all(mirrorTasks).then(function (nestedArrays) {
+          // Prioritize vidhide (HLS .m3u8) & 720p first
+          candidates.sort(function (a, b) {
+            var aScore = (a.isVidhide ? 10 : 0) + (a.is720 ? 5 : (a.is480 ? 2 : 0));
+            var bScore = (b.isVidhide ? 10 : 0) + (b.is720 ? 5 : (b.is480 ? 2 : 0));
+            return bScore - aScore;
+          });
+
+          var tasks = [];
+          for (var cIdx = 0; cIdx < Math.min(candidates.length, 3); cIdx++) {
+            (function (c) {
+              var payload = { id: c.parsed.id, i: c.parsed.i, q: c.parsed.q, nonce: nonce, action: streamAction };
+              var p = _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl, 2500).then(function (sRes) {
+                if (!sRes || !sRes.data) return [];
+                var htmlBlock = _b64Decode(sRes.data);
+                var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
+                if (!ifrSrc) return [];
+                return _extractFromEmbed(ifrSrc, episodeUrl, 2500).then(function (mSources) {
+                  for (var k = 0; k < mSources.length; k++) {
+                    if (c.parsed.q) mSources[k].quality = c.parsed.q;
+                  }
+                  return mSources;
+                });
+              }).catch(function () { return []; });
+              tasks.push(p);
+            })(candidates[cIdx]);
+          }
+
+          return Promise.all(tasks).then(function (nested) {
             var flat = [];
-            for (var i = 0; i < nestedArrays.length; i++) {
-              for (var j = 0; j < nestedArrays[i].length; j++) flat.push(nestedArrays[i][j]);
+            for (var i = 0; i < nested.length; i++) {
+              for (var j = 0; j < nested[i].length; j++) flat.push(nested[i][j]);
             }
             return flat;
           });
         }).catch(function () { return []; });
+
+      jobs.push(pMirrors);
     }
 
-    return Promise.all([pMain, pMirrors]).then(function (results) {
-      var all = results[0].concat(results[1]);
-      for (var i = 0; i < all.length; i++) pushSource(all[i]);
+    return _settleWithDeadline(jobs, 6500).then(function (results) {
+      for (var i = 0; i < results.length; i++) pushSource(results[i]);
 
       if (!sources.length) throw new Error('Otakudesu: no playable stream found');
 
-      // Rank HLS (m3u8 adaptive) & higher qualities first for smooth buffering
+      // Rank 720p/1080p and HLS streams first for immediate HD start
       sources.sort(function (a, b) {
-        var aScore = (a.container === 'hls' ? 10 : 0) + (parseInt(a.quality, 10) || 0);
-        var bScore = (b.container === 'hls' ? 10 : 0) + (parseInt(b.quality, 10) || 0);
+        var aScore = (a.container === 'hls' ? 100 : 0) + (parseInt(a.quality, 10) || 0);
+        var bScore = (b.container === 'hls' ? 100 : 0) + (parseInt(b.quality, 10) || 0);
         return bScore - aScore;
       });
 
