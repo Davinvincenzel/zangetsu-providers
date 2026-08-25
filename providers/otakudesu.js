@@ -14,7 +14,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '1.0.0'
+    version: '1.0.1'
   };
 }
 
@@ -323,66 +323,78 @@ function getVideoSources(episodeUrl) {
       }
     };
 
-    // 1. Default iframe embed
+    // 1. Fast parallel fetch: Main iframe embed
     var mainIfr = (epHtml.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
     var pMain = mainIfr ? _extractFromEmbed(mainIfr, episodeUrl) : Promise.resolve([]);
 
-    return pMain.then(function (sMain) {
-      for (var i = 0; i < sMain.length; i++) pushSource(sMain[i]);
+    // 2. Fast parallel fetch: Top mirrors (up to 3) via AJAX
+    var nonceActions = epHtml.match(/action:\s*"([a-f0-9]{32})"/g) || [];
+    var pMirrors = Promise.resolve([]);
 
-      // 2. Resolve mirrors from .mirrorstream via admin-ajax.php
-      var nonceActions = epHtml.match(/action:\s*"([a-f0-9]{32})"/g) || [];
-      if (nonceActions.length < 2) {
-        if (sources.length) return sources;
-        throw new Error('Otakudesu: no playable stream found');
-      }
-
+    if (nonceActions.length >= 2) {
       var streamAction = (nonceActions[0].match(/"([a-f0-9]{32})"/) || [])[1];
       var nonceAction = (nonceActions[1].match(/"([a-f0-9]{32})"/) || [])[1];
 
-      return _post(SITE + '/wp-admin/admin-ajax.php', { action: nonceAction }, episodeUrl)
+      pMirrors = _post(SITE + '/wp-admin/admin-ajax.php', { action: nonceAction }, episodeUrl)
         .then(function (nonceRes) {
           var nonce = nonceRes && nonceRes.data;
-          if (!nonce) return sources;
+          if (!nonce) return [];
 
           var mirrorLinks = epHtml.match(/<a[^>]+data-content="([^"]+)"[^>]*>([^<]+)<\/a>/g) || [];
-          var chain = Promise.resolve();
+          var mirrorTasks = [];
 
-          var checkMirror = function (linkTag) {
+          var fetchOneMirror = function (linkTag) {
             var contentB64 = (linkTag.match(/data-content="([^"]+)"/) || [])[1];
-            if (!contentB64) return;
+            if (!contentB64) return Promise.resolve([]);
             var decodedJson = _b64Decode(contentB64);
             var parsed;
             try { parsed = JSON.parse(decodedJson); } catch (e) { parsed = null; }
-            if (!parsed) return;
+            if (!parsed) return Promise.resolve([]);
 
             var payload = { id: parsed.id, i: parsed.i, q: parsed.q, nonce: nonce, action: streamAction };
-            chain = chain.then(function () {
-              return _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl).then(function (sRes) {
-                if (!sRes || !sRes.data) return;
-                var htmlBlock = _b64Decode(sRes.data);
-                var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
-                if (ifrSrc) {
-                  return _extractFromEmbed(ifrSrc, episodeUrl).then(function (mSources) {
-                    for (var k = 0; k < mSources.length; k++) {
-                      if (parsed.q) mSources[k].quality = parsed.q;
-                      pushSource(mSources[k]);
-                    }
-                  });
+            return _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl).then(function (sRes) {
+              if (!sRes || !sRes.data) return [];
+              var htmlBlock = _b64Decode(sRes.data);
+              var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
+              if (!ifrSrc) return [];
+
+              return _extractFromEmbed(ifrSrc, episodeUrl).then(function (mSources) {
+                for (var k = 0; k < mSources.length; k++) {
+                  if (parsed.q) mSources[k].quality = parsed.q;
                 }
+                return mSources;
               });
-            });
+            }).catch(function () { return []; });
           };
 
-          for (var m = 0; m < Math.min(mirrorLinks.length, 6); m++) {
-            checkMirror(mirrorLinks[m]);
+          for (var m = 0; m < Math.min(mirrorLinks.length, 3); m++) {
+            mirrorTasks.push(fetchOneMirror(mirrorLinks[m]));
           }
 
-          return chain.then(function () { return sources; });
-        });
-    }).then(function (finalSources) {
-      if (!finalSources.length) throw new Error('Otakudesu: no playable stream found');
-      return finalSources;
+          return Promise.all(mirrorTasks).then(function (nestedArrays) {
+            var flat = [];
+            for (var i = 0; i < nestedArrays.length; i++) {
+              for (var j = 0; j < nestedArrays[i].length; j++) flat.push(nestedArrays[i][j]);
+            }
+            return flat;
+          });
+        }).catch(function () { return []; });
+    }
+
+    return Promise.all([pMain, pMirrors]).then(function (results) {
+      var all = results[0].concat(results[1]);
+      for (var i = 0; i < all.length; i++) pushSource(all[i]);
+
+      if (!sources.length) throw new Error('Otakudesu: no playable stream found');
+
+      // Rank HLS (m3u8 adaptive) & higher qualities first for smooth buffering
+      sources.sort(function (a, b) {
+        var aScore = (a.container === 'hls' ? 10 : 0) + (parseInt(a.quality, 10) || 0);
+        var bScore = (b.container === 'hls' ? 10 : 0) + (parseInt(b.quality, 10) || 0);
+        return bScore - aScore;
+      });
+
+      return sources;
     });
   });
 }
