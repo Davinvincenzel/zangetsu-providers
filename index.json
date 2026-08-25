@@ -91,6 +91,15 @@
       "lang": "zh",
       "file": "providers/animecube.js",
       "nsfw": false
+    },
+    {
+      "id": "otakudesu",
+      "name": "Otakudesu",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "id",
+      "file": "providers/otakudesu.js",
+      "nsfw": false
     }
   ]
 }
