@@ -95,7 +95,7 @@
     {
       "id": "otakudesu",
       "name": "Otakudesu",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "type": "anime",
       "lang": "id",
       "file": "providers/otakudesu.js",

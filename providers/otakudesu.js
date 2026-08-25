@@ -14,13 +14,13 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '1.0.3'
+    version: '1.0.4'
   };
 }
 
 function _get(url, ref, timeoutMs) {
   var h = { 'User-Agent': UA, 'Referer': ref || SITE + '/' };
-  return fetch(url, { headers: h, timeoutMs: timeoutMs || 3500 })
+  return fetch(url, { headers: h, timeoutMs: timeoutMs || 3000 })
     .then(function (r) { return r.body || ''; })
     .catch(function () { return ''; });
 }
@@ -100,7 +100,7 @@ function search(query, page, opts) {
   var q = String(query || '').trim();
   if (q.length < 1) return Promise.resolve([]);
   var url = SITE + '/?s=' + encodeURIComponent(q) + '&post_type=anime';
-  return _get(url, SITE + '/', 4000).then(function (html) {
+  return _get(url, SITE + '/', 3500).then(function (html) {
     var out = [], seen = {};
     var chunks = html.split('<ul class="chivsrc">');
     if (chunks.length < 2) return [];
@@ -131,7 +131,7 @@ function search(query, page, opts) {
 
 // ── Home ─────────────────────────────────────────────────────────────────────
 function getHome(opts) {
-  return _get(SITE + '/', SITE + '/', 4000).then(function (html) {
+  return _get(SITE + '/', SITE + '/', 3500).then(function (html) {
     var sections = html.split(/<div class=["']venz["']>/i);
     var out = [];
     for (var i = 1; i < sections.length; i++) {
@@ -172,7 +172,7 @@ function getHome(opts) {
 // ── Detail & Episodes ────────────────────────────────────────────────────────
 function getDetail(url, opts) {
   var aurl = String(url);
-  return _get(aurl, SITE + '/', 4000).then(function (html) {
+  return _get(aurl, SITE + '/', 3500).then(function (html) {
     var title = _cleanTitle(
       (html.match(/<b>Judul<\/b>\s*:\s*([^<]+)/i) || [])[1]
       || (html.match(/<div class="infozingle">[\s\S]*?<b>Judul<\/b>\s*:\s*([^<]+)/i) || [])[1]
@@ -258,16 +258,9 @@ function _extractFromEmbed(embedUrl, ref, timeoutMs) {
       if (!sUrl) return;
       sUrl = sUrl.replace(/\\/g, '');
       var isHls = /\.m3u8(\?|$)/i.test(sUrl);
-      var quality = q || '720p';
-      if (!q) {
-        if (sUrl.indexOf('1080') > -1) quality = '1080p';
-        else if (sUrl.indexOf('720') > -1) quality = '720p';
-        else if (sUrl.indexOf('480') > -1) quality = '480p';
-        else if (sUrl.indexOf('360') > -1) quality = '360p';
-      }
       out.push({
         url: sUrl,
-        quality: quality,
+        quality: q || '720p',
         container: isHls ? 'hls' : 'mp4',
         headers: { 'User-Agent': UA, 'Referer': embedUrl },
         kind: 'sub',
@@ -276,9 +269,10 @@ function _extractFromEmbed(embedUrl, ref, timeoutMs) {
     };
 
     // 1. Direct video source or file URL
-    var fileMatch = html.match(/<source[^>]+src="([^"]+)"/i)
-      || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
+    var fileMatch = html.match(/const\s+videoURL\s*=\s*["']([^"']+)["']/i)
       || html.match(/videoURL\s*=\s*["']([^"']+)["']/i)
+      || html.match(/<source[^>]+src="([^"]+)"/i)
+      || html.match(/file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
       || html.match(/src\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i)
       || html.match(/<video[^>]+src="([^"]+)"/i);
 
@@ -300,6 +294,77 @@ function _extractFromEmbed(embedUrl, ref, timeoutMs) {
 
     return out;
   }).catch(function () { return []; });
+}
+
+function _resolveFallbackMirrors(epHtml, episodeUrl) {
+  var nonceActions = epHtml.match(/action:\s*"([a-f0-9]{32})"/g) || [];
+  if (nonceActions.length < 2) return Promise.resolve([]);
+
+  var streamAction = (nonceActions[0].match(/"([a-f0-9]{32})"/) || [])[1];
+  var nonceAction = (nonceActions[1].match(/"([a-f0-9]{32})"/) || [])[1];
+
+  return _post(SITE + '/wp-admin/admin-ajax.php', { action: nonceAction }, episodeUrl, 2000)
+    .then(function (nonceRes) {
+      var nonce = nonceRes && nonceRes.data;
+      if (!nonce) return [];
+
+      var mirrorLinks = epHtml.match(/<a[^>]+data-content="([^"]+)"[^>]*>([^<]+)<\/a>/g) || [];
+      var candidates = [];
+
+      for (var m = 0; m < mirrorLinks.length; m++) {
+        var linkTag = mirrorLinks[m];
+        var contentB64 = (linkTag.match(/data-content="([^"]+)"/) || [])[1];
+        if (!contentB64) continue;
+        var decoded = _b64Decode(contentB64);
+        var parsed;
+        try { parsed = JSON.parse(decoded); } catch (e) { parsed = null; }
+        if (!parsed) continue;
+
+        var name = ((linkTag.match(/>([^<]+)<\/a>/) || [])[1] || '').trim().toLowerCase();
+        var q = parsed.q || '';
+        var is720 = q.indexOf('720') > -1 || q.indexOf('1080') > -1;
+        var is480 = q.indexOf('480') > -1;
+        var isVidhide = name.indexOf('vidhide') > -1;
+
+        if (name.indexOf('vidhide') > -1 || name.indexOf('ondesu') > -1 || name.indexOf('otaku') > -1 || name.indexOf('desu') > -1 || name.indexOf('yourupload') > -1) {
+          candidates.push({ parsed: parsed, is720: is720, is480: is480, isVidhide: isVidhide });
+        }
+      }
+
+      candidates.sort(function (a, b) {
+        var aScore = (a.isVidhide ? 10 : 0) + (a.is720 ? 5 : (a.is480 ? 2 : 0));
+        var bScore = (b.isVidhide ? 10 : 0) + (b.is720 ? 5 : (b.is480 ? 2 : 0));
+        return bScore - aScore;
+      });
+
+      var tasks = [];
+      for (var cIdx = 0; cIdx < Math.min(candidates.length, 2); cIdx++) {
+        (function (c) {
+          var payload = { id: c.parsed.id, i: c.parsed.i, q: c.parsed.q, nonce: nonce, action: streamAction };
+          var p = _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl, 2000).then(function (sRes) {
+            if (!sRes || !sRes.data) return [];
+            var htmlBlock = _b64Decode(sRes.data);
+            var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
+            if (!ifrSrc) return [];
+            return _extractFromEmbed(ifrSrc, episodeUrl, 2000).then(function (mSources) {
+              for (var k = 0; k < mSources.length; k++) {
+                if (c.parsed.q) mSources[k].quality = c.parsed.q;
+              }
+              return mSources;
+            });
+          }).catch(function () { return []; });
+          tasks.push(p);
+        })(candidates[cIdx]);
+      }
+
+      return Promise.all(tasks).then(function (nested) {
+        var flat = [];
+        for (var i = 0; i < nested.length; i++) {
+          for (var j = 0; j < nested[i].length; j++) flat.push(nested[i][j]);
+        }
+        return flat;
+      });
+    }).catch(function () { return []; });
 }
 
 function _resolveMegaPlay(query, epNum) {
@@ -339,7 +404,7 @@ function _resolveMegaPlay(query, epNum) {
           if (!mp && subList.length) mp = subList[0];
           if (!mp || !mp.url) return [];
           var srcUrl = 'https://anikoto.com/api/stream?url=' + encodeURIComponent(mp.url);
-          return fetch(srcUrl, { timeoutMs: 2500 }).then(function (strRes) {
+          return fetch(srcUrl, { timeoutMs: 2000 }).then(function (strRes) {
             var strJ;
             try { strJ = JSON.parse(strRes.body || 'null'); } catch (e) { strJ = null; }
             var srcArr = (strJ && strJ.sources) || [];
@@ -365,124 +430,47 @@ function _resolveMegaPlay(query, epNum) {
 }
 
 function getVideoSources(episodeUrl) {
-  return _get(episodeUrl, SITE + '/', 3500).then(function (epHtml) {
+  return _get(episodeUrl, SITE + '/', 3000).then(function (epHtml) {
     if (!epHtml) return Promise.reject(new Error('Otakudesu: episode page not found'));
-    var sources = [], seenUrls = {};
 
-    var pushSource = function (item) {
-      if (item && item.url && !seenUrls[item.url]) {
-        seenUrls[item.url] = 1;
-        sources.push(item);
-      }
-    };
-
-    var epTitleMatch = (epHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i) || [])[1] || '';
-    var cleanTitle = epTitleMatch.replace(/Episode\s+\d+/i, '').replace(/Subtitle Indonesia|Sub Indo/gi, '').trim();
-    var numMatch = epTitleMatch.match(/Episode\s+(\d+)/i) || epTitleMatch.match(/(\d+)/);
-    var epNum = numMatch ? parseInt(numMatch[1], 10) : 1;
-
-    var jobs = [];
-
-    // 1. Immediate Main Iframe extraction
+    // FAST PATH: Check the main default player directly (instant response ~500ms)
     var mainIfr = (epHtml.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
     if (mainIfr) {
-      jobs.push(_extractFromEmbed(mainIfr, episodeUrl, 2000));
-    }
+      return _extractFromEmbed(mainIfr, episodeUrl, 2500).then(function (mainSources) {
+        if (mainSources && mainSources.length > 0) {
+          return mainSources;
+        }
 
-    // 2. High-speed 720p / 480p Vidhide & DesuStream mirrors
-    var nonceActions = epHtml.match(/action:\s*"([a-f0-9]{32})"/g) || [];
-    if (nonceActions.length >= 2) {
-      var streamAction = (nonceActions[0].match(/"([a-f0-9]{32})"/) || [])[1];
-      var nonceAction = (nonceActions[1].match(/"([a-f0-9]{32})"/) || [])[1];
+        // Secondary path: If main player had no direct link, check mirrors and CDN
+        var epTitleMatch = (epHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i) || [])[1] || '';
+        var cleanTitle = epTitleMatch.replace(/Episode\s+\d+/i, '').replace(/Subtitle Indonesia|Sub Indo/gi, '').trim();
+        var numMatch = epTitleMatch.match(/Episode\s+(\d+)/i) || epTitleMatch.match(/(\d+)/);
+        var epNum = numMatch ? parseInt(numMatch[1], 10) : 1;
 
-      var pMirrors = _post(SITE + '/wp-admin/admin-ajax.php', { action: nonceAction }, episodeUrl, 2000)
-        .then(function (nonceRes) {
-          var nonce = nonceRes && nonceRes.data;
-          if (!nonce) return [];
-
-          var mirrorLinks = epHtml.match(/<a[^>]+data-content="([^"]+)"[^>]*>([^<]+)<\/a>/g) || [];
-          var candidates = [];
-
-          for (var m = 0; m < mirrorLinks.length; m++) {
-            var linkTag = mirrorLinks[m];
-            var contentB64 = (linkTag.match(/data-content="([^"]+)"/) || [])[1];
-            if (!contentB64) continue;
-            var decoded = _b64Decode(contentB64);
-            var parsed;
-            try { parsed = JSON.parse(decoded); } catch (e) { parsed = null; }
-            if (!parsed) continue;
-
-            var name = ((linkTag.match(/>([^<]+)<\/a>/) || [])[1] || '').trim().toLowerCase();
-            var q = parsed.q || '';
-            var is720 = q.indexOf('720') > -1 || q.indexOf('1080') > -1;
-            var is480 = q.indexOf('480') > -1;
-            var isVidhide = name.indexOf('vidhide') > -1;
-
-            if (name.indexOf('vidhide') > -1 || name.indexOf('ondesu') > -1 || name.indexOf('otaku') > -1 || name.indexOf('desu') > -1 || name.indexOf('yourupload') > -1) {
-              candidates.push({ parsed: parsed, is720: is720, is480: is480, isVidhide: isVidhide });
-            }
-          }
-
-          // Sort candidates: Vidhide 720p (HLS) first
-          candidates.sort(function (a, b) {
-            var aScore = (a.isVidhide ? 10 : 0) + (a.is720 ? 5 : (a.is480 ? 2 : 0));
-            var bScore = (b.isVidhide ? 10 : 0) + (b.is720 ? 5 : (b.is480 ? 2 : 0));
-            return bScore - aScore;
-          });
-
-          var tasks = [];
-          for (var cIdx = 0; cIdx < Math.min(candidates.length, 2); cIdx++) {
-            (function (c) {
-              var payload = { id: c.parsed.id, i: c.parsed.i, q: c.parsed.q, nonce: nonce, action: streamAction };
-              var p = _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl, 2000).then(function (sRes) {
-                if (!sRes || !sRes.data) return [];
-                var htmlBlock = _b64Decode(sRes.data);
-                var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
-                if (!ifrSrc) return [];
-                return _extractFromEmbed(ifrSrc, episodeUrl, 2000).then(function (mSources) {
-                  for (var k = 0; k < mSources.length; k++) {
-                    if (c.parsed.q) mSources[k].quality = c.parsed.q;
-                  }
-                  return mSources;
-                });
-              }).catch(function () { return []; });
-              tasks.push(p);
-            })(candidates[cIdx]);
-          }
-
-          return Promise.all(tasks).then(function (nested) {
-            var flat = [];
-            for (var i = 0; i < nested.length; i++) {
-              for (var j = 0; j < nested[i].length; j++) flat.push(nested[i][j]);
-            }
-            return flat;
-          });
-        }).catch(function () { return []; });
-
-      jobs.push(pMirrors);
-    }
-
-    // 3. Fallback high-speed CDN stream
-    if (cleanTitle) {
-      jobs.push(_resolveMegaPlay(cleanTitle, epNum));
-    }
-
-    return Promise.all(jobs).then(function (results) {
-      for (var i = 0; i < results.length; i++) {
-        var rList = results[i] || [];
-        for (var j = 0; j < rList.length; j++) pushSource(rList[j]);
-      }
-
-      if (!sources.length) throw new Error('Otakudesu: no playable stream found');
-
-      // Rank 1080p/720p HLS adaptive streams first
-      sources.sort(function (a, b) {
-        var aScore = (a.container === 'hls' ? 100 : 0) + (parseInt(a.quality, 10) || (a.quality === 'auto' ? 90 : 0));
-        var bScore = (b.container === 'hls' ? 100 : 0) + (parseInt(b.quality, 10) || (b.quality === 'auto' ? 90 : 0));
-        return bScore - aScore;
+        return Promise.all([
+          _resolveFallbackMirrors(epHtml, episodeUrl),
+          cleanTitle ? _resolveMegaPlay(cleanTitle, epNum) : Promise.resolve([])
+        ]).then(function (resLists) {
+          var all = (resLists[0] || []).concat(resLists[1] || []);
+          if (!all.length) throw new Error('Otakudesu: no playable stream found');
+          return all;
+        });
       });
+    }
 
-      return sources;
+    // Fallback if no iframe found in episode HTML
+    var epTitleMatch2 = (epHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i) || [])[1] || '';
+    var cleanTitle2 = epTitleMatch2.replace(/Episode\s+\d+/i, '').replace(/Subtitle Indonesia|Sub Indo/gi, '').trim();
+    var numMatch2 = epTitleMatch2.match(/Episode\s+(\d+)/i) || epTitleMatch2.match(/(\d+)/);
+    var epNum2 = numMatch2 ? parseInt(numMatch2[1], 10) : 1;
+
+    return Promise.all([
+      _resolveFallbackMirrors(epHtml, episodeUrl),
+      cleanTitle2 ? _resolveMegaPlay(cleanTitle2, epNum2) : Promise.resolve([])
+    ]).then(function (resLists) {
+      var all = (resLists[0] || []).concat(resLists[1] || []);
+      if (!all.length) throw new Error('Otakudesu: no playable stream found');
+      return all;
     });
   });
 }
