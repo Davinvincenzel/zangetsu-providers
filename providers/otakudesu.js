@@ -14,7 +14,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '1.0.5'
+    version: '1.0.6'
   };
 }
 
