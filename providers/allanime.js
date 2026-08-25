@@ -25,7 +25,6 @@ function decodeSourceUrl(s) {
   for (var i = 0; i + 1 < body.length; i += 2) { var ch = _HEXMAP[body.substr(i, 2)]; out += (ch == null ? '' : ch); }
   return out.replace('/clock', '/clock.json');
 }
-globalThis.__allanimeDecodeSourceUrl = decodeSourceUrl; // test hook
 
 // ── Pure JS Cryptographic Engine (Zero Dependency, Works Everywhere) ─────────
 
@@ -385,11 +384,10 @@ function _fetchAAKeys() {
       }
 
       _aaKeysCache = { epoch: epoch, key: key };
-      _aaKeysExp = now + 180000; // 3 minutes TTL
+      _aaKeysExp = now + 180000;
       return _aaKeysCache;
     })
     .catch(function () {
-      // Fallback: derive static fallback key
       return _sha256Bytes(ALLANIME_KEY_SEED).then(function (k) {
         _aaKeysCache = { epoch: '2955', key: k.slice(0, 32) };
         _aaKeysExp = now + 60000;
@@ -399,7 +397,7 @@ function _fetchAAKeys() {
 }
 
 function _buildAAReq(qh, keys) {
-  var aaReqWindowMillis = 300000; // 5 minutes
+  var aaReqWindowMillis = 300000;
   var ts = Math.floor(Date.now() / aaReqWindowMillis) * aaReqWindowMillis;
   var payload = JSON.stringify({ v: 1, ts: ts, epoch: Number(keys.epoch) || 2955, qh: qh });
   var ivSeed = keys.epoch + ':' + qh + ':' + ts;
@@ -435,7 +433,7 @@ function _post(query, variables, endpoint) {
 }
 
 function getInfo() {
-  return { name: 'AllAnime', lang: 'en', baseUrl: 'https://allanime.to', logo: 'https://allanime.to/favicon.ico', type: 'anime', version: '1.0.7' };
+  return { name: 'AllAnime', lang: 'en', baseUrl: 'https://allanime.to', logo: 'https://allanime.to/favicon.ico', type: 'anime', version: '1.0.8' };
 }
 
 // ── Episode thumbnails (Kitsu, keyed by the show's malId) ────────────────────
@@ -577,7 +575,6 @@ function _decryptTobeparsed(b64, keys) {
         obj.sourceUrls || [];
     })
     .catch(function () {
-      // Fallback: try with ALLANIME_KEY_SEED
       return _sha256Bytes(ALLANIME_KEY_SEED).then(function (seedKey) {
         return _aesGcmDecrypt(seedKey.slice(0, 32), nonce, cipherWithTag)
           .then(function (plain) {
@@ -611,65 +608,23 @@ function _fetchSourceUrls(showId, mode, epNo) {
         aaReq: aaReq
       });
 
-      // 1. Try Persisted Query GET with native CF solver (browser: true)
       var getUrl = API + '?variables=' + encodeURIComponent(vars) + '&extensions=' + encodeURIComponent(ext);
-      var getHeaders = { 'Referer': REFERER, 'Origin': ORIGIN };
 
-      return fetch(getUrl, { headers: getHeaders, browser: true, timeoutMs: 12000 })
+      return fetch(getUrl, { headers: { 'Referer': REFERER, 'Origin': ORIGIN, 'User-Agent': UA }, timeoutMs: 6000 })
         .then(function (r) {
           return _parseSourcesFromText(r.body, keys);
         })
-        .catch(function () { return null; })
-        .then(function (sources) {
-          if (sources && sources.length) return sources;
-
-          // 2. Try Persisted Query GET standard fetch
-          return fetch(getUrl, { headers: _headers(), timeoutMs: 8000 })
-            .then(function (r) {
-              return _parseSourcesFromText(r.body, keys);
-            })
-            .catch(function () { return null; });
-        })
-        .then(function (sources) {
-          if (sources && sources.length) return sources;
-
-          // 3. Try GraphQL POST with browser: true
-          var postBody = JSON.stringify({
-            query: EPISODE_GQL,
-            variables: { showId: showId, translationType: mode, episodeString: String(epNo) },
-            extensions: { aaReq: aaReq }
-          });
-          return fetch(API, { method: 'POST', headers: { 'Referer': REFERER, 'Origin': ORIGIN, 'Content-Type': 'application/json' }, body: postBody, browser: true, timeoutMs: 12000 })
-            .then(function (r) {
-              return _parseSourcesFromText(r.body, keys);
-            })
-            .catch(function () { return null; });
-        })
-        .then(function (sources) {
-          if (sources && sources.length) return sources;
-
-          // 4. Try scraping watch page via browser bridge
-          var watchUrl = 'https://allanime.to/anime/' + showId + '/ep-' + epNo + '-' + mode;
-          return fetch(watchUrl, { headers: { 'Referer': 'https://allanime.to/' }, browser: true, timeoutMs: 15000 })
-            .then(function (r) {
-              return _parseSourcesFromText(r.body, keys);
-            })
-            .catch(function () { return null; });
-        })
-        .then(function (sources) {
-          if (sources && sources.length) return sources;
-          throw new Error('AllAnime: no sources in response');
-        });
+        .catch(function () { return null; });
     });
-  });
+  }).catch(function () { return null; });
 }
 
 function _resolveClock(path, mode) {
-  var hosts = ['https://allanime.day', 'https://tools.allmanga.to', 'https://api.allanime.day'];
+  var hosts = ['https://allanime.day', 'https://tools.allmanga.to'];
   function tryHost(idx) {
     if (idx >= hosts.length) return Promise.resolve([]);
     var base = hosts[idx];
-    return fetch(base + path, { headers: { 'Referer': REFERER, 'User-Agent': UA }, timeoutMs: 8000 })
+    return fetch(base + path, { headers: { 'Referer': REFERER, 'User-Agent': UA }, timeoutMs: 6000 })
       .then(function (r) {
         var j; try { j = JSON.parse(r.body || 'null'); } catch (e) { return tryHost(idx + 1); }
         var links = (j && j.links) || [];
@@ -695,6 +650,149 @@ function _resolveClock(path, mode) {
   return tryHost(0);
 }
 
+// ── Resilient Stream Resolver (MegaPlay / AniKoto / Multi-Source) ────────────
+
+function _resolveMegaPlay(embedUrl, mode) {
+  return fetch(embedUrl, { headers: { 'User-Agent': UA, 'Referer': 'https://anikoto.cz/' }, timeoutMs: 8000 })
+    .then(function (r) { return r.body || ''; })
+    .then(function (html) {
+      var dataId = (html.match(/data-id="(\d+)"/i) || [])[1];
+      if (!dataId) return [];
+      var base = (embedUrl.match(/^(https?:\/\/[^/]+)/) || [])[1] || 'https://megaplay.buzz';
+      return fetch(base + '/stream/getSources?id=' + dataId, {
+        headers: { 'User-Agent': UA, 'Referer': embedUrl, 'X-Requested-With': 'XMLHttpRequest' },
+        timeoutMs: 8000
+      }).then(function (r2) {
+        var j; try { j = JSON.parse(r2.body || 'null'); } catch (e) { return []; }
+        var s = j && j.sources;
+        var file = s ? (s.file || (s[0] && s[0].file)) : null;
+        if (!file) return [];
+
+        var subs = [];
+        var tracks = (j && j.tracks) || [];
+        for (var i = 0; i < tracks.length; i++) {
+          var t = tracks[i];
+          if (!t || !t.file) continue;
+          if (t.kind && t.kind !== 'captions' && t.kind !== 'subtitles') continue;
+          subs.push({
+            url: t.file,
+            lang: t.label || 'Sub',
+            label: t.label || 'Sub',
+            format: /\.srt(\?|$)/i.test(t.file) ? 'srt' : 'vtt',
+            'default': !!t['default']
+          });
+        }
+
+        var hdrs = { 'User-Agent': UA, 'Referer': base + '/', 'Origin': base };
+        var mk = function (u, q) {
+          return {
+            url: u,
+            quality: q,
+            container: /\.m3u8(\?|$)/i.test(u) ? 'hls' : 'mp4',
+            headers: hdrs,
+            kind: mode,
+            audioLang: mode === 'dub' ? 'en' : 'ja',
+            subtitles: subs
+          };
+        };
+
+        if (!/\.m3u8(\?|$)/i.test(file)) return [mk(file, 'auto')];
+
+        return fetch(file, { headers: { 'User-Agent': UA, 'Referer': base + '/' }, timeoutMs: 6000 })
+          .then(function (mr) {
+            var body = mr.body || '';
+            var dir = file.replace(/[^/]*(\?.*)?$/, '');
+            var vs = [], m, re = /#EXT-X-STREAM-INF:[^\n]*?RESOLUTION=\d+x(\d+)[^\n]*\r?\n([^\r\n#]+)/gi;
+            while ((m = re.exec(body)) !== null) {
+              var h = parseInt(m[1], 10);
+              var uri = String(m[2]).replace(/^\s+|\s+$/g, '');
+              if (!uri) continue;
+              vs.push({ h: h, url: /^https?:/i.test(uri) ? uri : (dir + uri) });
+            }
+            vs.sort(function (a, b) { return b.h - a.h; });
+            var out = [mk(file, 'auto')];
+            for (var k = 0; k < vs.length; k++) out.push(mk(vs[k].url, vs[k].h + 'p'));
+            return out;
+          })
+          .catch(function () { return [mk(file, 'auto')]; });
+      });
+    })
+    .catch(function () { return []; });
+}
+
+function _fallbackStreamResolution(showId, mode, epNo) {
+  return _post(SHOW_GQL, { showId: showId }).then(function (j) {
+    var show = (j && j.data && j.data.show) || {};
+    var title = show.englishName || show.name || '';
+    if (!title) throw new Error('AllAnime: show not found');
+
+    var searchTitle = title.replace(/\s*Season\s*(\d+)/i, ' Season $1').replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
+    var searchUrl = 'https://anikoto.cz/filter?keyword=' + encodeURIComponent(searchTitle);
+    return fetch(searchUrl, { headers: { 'User-Agent': UA }, timeoutMs: 8000 })
+      .then(function (r) { return r.body || ''; })
+      .then(function (sHtml) {
+        var slugMatch = sHtml.match(/class="[^"]*film-poster-ahref[^"]*"\s+href="\/watch\/([^"?#]+)"/i) || sHtml.match(/\/watch\/([^"?#]+)/i);
+        if (!slugMatch) throw new Error('AllAnime: fallback search not found');
+
+        var slug = slugMatch[1].replace(/\/ep-\d+$/, '');
+        var watchUrl = 'https://anikoto.cz/watch/' + slug;
+        return fetch(watchUrl, { headers: { 'User-Agent': UA }, timeoutMs: 8000 })
+          .then(function (r2) { return r2.body || ''; })
+          .then(function (watchHtml) {
+            var animeId = (watchHtml.match(/data-id="(\d+)"/i) || [])[1];
+            if (!animeId) throw new Error('AllAnime: fallback animeId not found');
+
+            var epListUrl = 'https://anikoto.cz/ajax/episode/list/' + animeId;
+            return fetch(epListUrl, {
+              headers: { 'User-Agent': UA, 'Referer': watchUrl, 'X-Requested-With': 'XMLHttpRequest' },
+              timeoutMs: 8000
+            })
+              .then(function (r3) {
+                var j3; try { j3 = JSON.parse(r3.body || 'null'); } catch (e) { return ''; }
+                return (j3 && j3.result) || '';
+              })
+              .then(function (epHtml) {
+                var reEp = new RegExp('data-number="' + epNo + '"[^>]*data-id="([^"]+)"[^>]*data-ids="([^"]+)"', 'i');
+                var epMatch = epHtml.match(reEp) || epHtml.match(/data-id="([^"]+)"[^>]*data-ids="([^"]+)"/i);
+                if (!epMatch) throw new Error('AllAnime: episode not found in fallback');
+
+                var serverIds = epMatch[2];
+                var srvUrl = 'https://anikoto.cz/ajax/server/list?servers=' + encodeURIComponent(serverIds);
+                return fetch(srvUrl, {
+                  headers: { 'User-Agent': UA, 'Referer': watchUrl, 'X-Requested-With': 'XMLHttpRequest' },
+                  timeoutMs: 8000
+                })
+                  .then(function (r4) {
+                    var j4; try { j4 = JSON.parse(r4.body || 'null'); } catch (e) { return ''; }
+                    return (j4 && j4.result) || '';
+                  })
+                  .then(function (srvHtml) {
+                    var linkIdMatch = (mode === 'dub' ? srvHtml.match(/data-type="dub"[^>]*data-link-id="([^"]+)"/i) : null) ||
+                                      srvHtml.match(/data-type="sub"[^>]*data-link-id="([^"]+)"/i) ||
+                                      srvHtml.match(/data-link-id="([^"]+)"/i);
+                    if (!linkIdMatch) throw new Error('AllAnime: server linkId not found');
+
+                    var linkId = linkIdMatch[1];
+                    var getUrl = 'https://anikoto.cz/ajax/server?get=' + linkId;
+                    return fetch(getUrl, {
+                      headers: { 'User-Agent': UA, 'Referer': watchUrl, 'X-Requested-With': 'XMLHttpRequest' },
+                      timeoutMs: 8000
+                    })
+                      .then(function (r5) {
+                        var j5; try { j5 = JSON.parse(r5.body || 'null'); } catch (e) { return null; }
+                        return j5 && j5.result && j5.result.url;
+                      })
+                      .then(function (embedUrl) {
+                        if (!embedUrl) throw new Error('AllAnime: embedUrl not found');
+                        return _resolveMegaPlay(embedUrl, mode);
+                      });
+                  });
+              });
+          });
+      });
+  });
+}
+
 function _settleWithDeadline(jobs, deadlineMs) {
   return new Promise(function (resolve) {
     var results = [];
@@ -711,58 +809,61 @@ function _settleWithDeadline(jobs, deadlineMs) {
     setTimeout(finish, deadlineMs);
   });
 }
-globalThis.__allanimeSettleWithDeadline = _settleWithDeadline; // test hook
 
 function getVideoSources(episodeUrl) {
   var m = String(episodeUrl).replace('allanime://', '').split('/');
   var showId = m[0], mode = (m[1] === 'dub') ? 'dub' : 'sub', epNo = m[2];
 
   return _fetchSourceUrls(showId, mode, epNo).then(function (sourceUrls) {
-    var SKIP = { 'Ss-Hls': 1 }; // dead host
-    var hdr = { 'Referer': REFERER, 'User-Agent': UA };
-    var list = sourceUrls.slice().sort(function (a, b) {
-      return (b.priority || 0) - (a.priority || 0);
-    });
+    if (sourceUrls && sourceUrls.length) {
+      var SKIP = { 'Ss-Hls': 1 };
+      var hdr = { 'Referer': REFERER, 'User-Agent': UA };
+      var list = sourceUrls.slice().sort(function (a, b) { return (b.priority || 0) - (a.priority || 0); });
+      var jobs = [];
 
-    var jobs = [];
-    for (var i = 0; i < list.length; i++) {
-      var su = list[i];
-      var name = su.sourceName || '';
-      var raw = String(su.sourceUrl || '');
-      var type = su.sourceName ? (su.type || '') : '';
-      if (SKIP[name]) continue;
+      for (var i = 0; i < list.length; i++) {
+        var su = list[i];
+        var name = su.sourceName || '';
+        var raw = String(su.sourceUrl || '');
+        var type = su.sourceName ? (su.type || '') : '';
+        if (SKIP[name]) continue;
 
-      // 1. Internal clock endpoint (`--`-obfuscated)
-      if (raw.indexOf('--') === 0) {
-        var path = decodeSourceUrl(raw);
-        if (path.indexOf('/clock') !== -1) {
-          jobs.push(_resolveClock(path, mode).catch(function () { return []; }));
+        if (raw.indexOf('--') === 0) {
+          var path = decodeSourceUrl(raw);
+          if (path.indexOf('/clock') !== -1) {
+            jobs.push(_resolveClock(path, mode).catch(function () { return []; }));
+          }
+          continue;
         }
-        continue;
+
+        if (!/^https?:\/\//.test(raw)) continue;
+
+        if (type === 'player' || /\.(m3u8|mp4)(\?|$)/i.test(raw)) {
+          jobs.push(Promise.resolve([{
+            url: raw,
+            quality: su.resolutionStr || '1080p',
+            container: /\.m3u8/i.test(raw) ? 'hls' : 'mp4',
+            headers: hdr,
+            kind: mode,
+            audioLang: mode === 'dub' ? 'en' : 'ja',
+            subtitles: []
+          }]));
+        } else {
+          jobs.push(extractVideo(raw, { headers: hdr, kind: mode, audioLang: mode === 'dub' ? 'en' : 'ja' }).catch(function () { return []; }));
+        }
       }
 
-      // 2. Direct stream or embed extractor
-      if (!/^https?:\/\//.test(raw)) continue;
-
-      if (type === 'player' || /\.(m3u8|mp4)(\?|$)/i.test(raw)) {
-        jobs.push(Promise.resolve([{
-          url: raw,
-          quality: su.resolutionStr || '1080p',
-          container: /\.m3u8/i.test(raw) ? 'hls' : 'mp4',
-          headers: hdr,
-          kind: mode,
-          audioLang: mode === 'dub' ? 'en' : 'ja',
-          subtitles: []
-        }]));
-      } else {
-        jobs.push(extractVideo(raw, { headers: hdr, kind: mode, audioLang: mode === 'dub' ? 'en' : 'ja' }).catch(function () { return []; }));
+      if (jobs.length > 0) {
+        return _settleWithDeadline(jobs, 8000).then(function (all) {
+          if (all && all.length > 0) return all;
+          return _fallbackStreamResolution(showId, mode, epNo);
+        });
       }
     }
 
-    var deadline = (typeof globalThis.__allanimeDeadlineMs === 'number') ? globalThis.__allanimeDeadlineMs : 8000;
-    return _settleWithDeadline(jobs, deadline).then(function (all) {
-      if (all.length === 0) throw new Error('AllAnime: no playable sources');
-      return all;
-    });
+    return _fallbackStreamResolution(showId, mode, epNo);
+  }).then(function (sources) {
+    if (!sources || sources.length === 0) throw new Error('AllAnime: no playable sources');
+    return sources;
   });
 }
