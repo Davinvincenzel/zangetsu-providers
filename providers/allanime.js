@@ -436,7 +436,7 @@ function _post(query, variables, endpoint) {
 }
 
 function getInfo() {
-  return { name: 'AllAnime', lang: 'en', baseUrl: 'https://allanime.to', logo: 'https://allanime.to/favicon.ico', type: 'anime', version: '1.0.5' };
+  return { name: 'AllAnime', lang: 'en', baseUrl: 'https://allanime.to', logo: 'https://allanime.to/favicon.ico', type: 'anime', version: '1.0.6' };
 }
 
 // ── Episode thumbnails (Kitsu, keyed by the show's malId) ────────────────────
