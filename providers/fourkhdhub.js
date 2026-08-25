@@ -34,7 +34,7 @@ function _domains() {
 function getInfo() {
   return {
     name: '4K HDHub', lang: 'en', baseUrl: 'https://4khdhub.link',
-    logo: 'https://4khdhub.link/favicon.ico', type: 'movie', version: '1.0.5'
+    logo: 'https://4khdhub.link/favicon.ico', type: 'movie', version: '1.0.6'
   };
 }
 
@@ -58,6 +58,16 @@ function _get(url, ref) {
     .then(function (r) { return r.body || ''; }).catch(function () { return ''; });
 }
 function _quality(s) { var m = String(s || '').match(/(\d{3,4})[pP]/); return m ? (m[1] + 'p') : null; }
+
+function _src(url, quality, label) {
+  var hls = /\.m3u8(\?|$)/i.test(url);
+  var mkv = /\.mkv(\?|$)/i.test(url);
+  return {
+    url: url, quality: quality || 'auto', container: hls ? 'hls' : (mkv ? 'mkv' : 'mp4'),
+    headers: { 'User-Agent': UA }, kind: 'sub', audioLang: '',
+    subtitles: [], label: _trim(label || '')
+  };
+}
 
 // Parse `div.card-grid a` cards out of raw HTML.
 function _cards(html, main) {
@@ -423,6 +433,28 @@ function _name(server, info) {
   return n;
 }
 
+function _resolveFinalStream(url) {
+  if (!url) return Promise.resolve(null);
+  if (url.indexOf('gamerxyt.com') !== -1 || url.indexOf('dl.php?link=') !== -1) {
+    var lp = (url.match(/link=([^&]+)/) || [])[1];
+    if (lp) return Promise.resolve(decodeURIComponent(lp));
+  }
+  if (url.indexOf('pixel.hubcloud') !== -1 || url.indexOf('hubcloud.cx') !== -1 || url.indexOf('workers.dev') !== -1) {
+    return fetch(url, { headers: { 'User-Agent': UA, 'Referer': url }, followRedirects: false })
+      .then(function (r) {
+        var loc = (r.headers || {})['location'] || (r.headers || {})['Location'] || '';
+        if (loc) return _resolveFinalStream(loc);
+        var b = r.body || '';
+        if (b.indexOf('gamerxyt.com') !== -1 || b.indexOf('dl.php?link=') !== -1) {
+          var m = b.match(/https?:\/\/[^"'\s`]*dl\.php\?link=([^"'\s`&]+)/i);
+          if (m) return decodeURIComponent(m[1]);
+        }
+        return url;
+      }).catch(function () { return url; });
+  }
+  return Promise.resolve(url);
+}
+
 function _hubServer(link, label, info) {
   var server = _serverName(label);
   var name = _name(server, info);
@@ -445,7 +477,9 @@ function _hubServer(link, label, info) {
   if (label.indexOf('fsl') !== -1 || label.indexOf('download file') !== -1 ||
       label.indexOf('s3 server') !== -1 || label.indexOf('mega') !== -1 ||
       label.indexOf('pdl') !== -1 || label.indexOf('10gbps') !== -1) {
-    return Promise.resolve(_src(link, q, name));
+    return _resolveFinalStream(link).then(function (fin) {
+      return fin ? _src(fin, q, name) : null;
+    });
   }
   // Unknown button — only keep if it already looks like a direct media file.
   if (/\.(mp4|mkv|m3u8)(\?|$)/i.test(link)) return Promise.resolve(_src(link, q, name));
@@ -485,7 +519,7 @@ function _dispatch(link) {
 }
 
 function getVideoSources(episodeUrl) {
-  var hrefs = _epHrefs(episodeUrl).slice(0, 10);
+  var hrefs = _epHrefs(episodeUrl).slice(0, 4);
   if (!hrefs.length) return Promise.reject(new Error('4K HDHub: no download links'));
   var jobs = hrefs.map(function (raw) {
     var p = raw.indexOf('id=') !== -1 ? _resolveRedirect(raw) : Promise.resolve(raw);
