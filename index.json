@@ -100,6 +100,15 @@
       "lang": "id",
       "file": "providers/otakudesu.js",
       "nsfw": false
+    },
+    {
+      "id": "ylnime",
+      "name": "YLnime",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "id",
+      "file": "providers/ylnime.js",
+      "nsfw": false
     }
   ]
 }
