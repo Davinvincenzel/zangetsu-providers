@@ -109,6 +109,15 @@
       "lang": "id",
       "file": "providers/ylnime.js",
       "nsfw": false
+    },
+    {
+      "id": "samehadaku",
+      "name": "Samehadaku",
+      "version": "1.0.0",
+      "type": "anime",
+      "lang": "id",
+      "file": "providers/samehadaku.js",
+      "nsfw": false
     }
   ]
 }
