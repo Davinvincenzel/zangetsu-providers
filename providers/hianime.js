@@ -10,14 +10,14 @@
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
   ? String(__SOURCE_ID) : 'hianime';
 
-var API = 'https://animedata.cfd/api';
+var API = 'https://aniwatchbackend.cfd/api';
 var SITE = 'https://hianimes.se';
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/120.0 Safari/537.36';
 
 function getInfo() {
   return { name: 'HiAnime', lang: 'en', baseUrl: SITE,
-    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.8' };
+    logo: SITE + '/favicon.ico', type: 'anime', version: '1.0.9' };
 }
 
 function _mode(opts) { return (opts && opts.category === 'dub') ? 'dub' : 'sub'; }
