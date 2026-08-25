@@ -9,13 +9,12 @@ var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 function getInfo() {
   return {
-    id: 'samehadaku',
     name: 'Samehadaku',
     lang: 'id',
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2024/07/logo-samehadaku-2.png',
     type: 'anime',
-    version: '1.0.1'
+    version: '1.0.2'
   };
 }
 
@@ -40,8 +39,13 @@ function _decodeEntities(str) {
 
 function _get(url, ref, timeoutMs) {
   var h = { 'User-Agent': UA, 'Referer': ref || SITE + '/' };
-  return fetch(url, { headers: h, timeoutMs: timeoutMs || 4000 })
-    .then(function (r) { return r.body || ''; })
+  return fetch(url, { headers: h, timeoutMs: timeoutMs || 3000 })
+    .then(function (r) {
+      if (!r) return '';
+      if (typeof r === 'string') return r;
+      if (typeof r.body === 'string') return r.body;
+      return '';
+    })
     .catch(function () { return ''; });
 }
 
@@ -64,8 +68,13 @@ function _post(url, data, ref, timeoutMs) {
     }
     body = pairs.join('&');
   }
-  return fetch(url, { method: 'POST', headers: h, body: body, timeoutMs: timeoutMs || 4000 })
-    .then(function (r) { return r.body || ''; })
+  return fetch(url, { method: 'POST', headers: h, body: body, timeoutMs: timeoutMs || 3000 })
+    .then(function (r) {
+      if (!r) return '';
+      if (typeof r === 'string') return r;
+      if (typeof r.body === 'string') return r.body;
+      return '';
+    })
     .catch(function () { return ''; });
 }
 
@@ -95,7 +104,6 @@ function _ensureAbsolute(u) {
     if (!/\/$/.test(res2)) res2 += '/';
     return res2;
   }
-  // Bare slug like 'one-piece'
   return SITE + '/anime/' + s.replace(/^\/+|\/+$/g, '') + '/';
 }
 
@@ -132,7 +140,6 @@ function _unpack(code) {
 function _parseCardItems(html) {
   var out = [], seen = {};
 
-  // 1. Check article items (Search, Movies, Listing)
   var articles = html.match(/<article[\s\S]*?<\/article>/gi)
     || html.match(/<div class=["']animposx["'][\s\S]*?<\/div>\s*<\/div>/gi) || [];
 
@@ -166,7 +173,6 @@ function _parseCardItems(html) {
     });
   }
 
-  // 2. Check li items in post-show / widget_senction (Home / Anime Terbaru)
   if (out.length === 0) {
     var listItems = html.match(/<li[^>]*itemscope[^>]*>[\s\S]*?<\/li>/gi)
       || html.match(/<li[^>]*>[\s\S]*?<\/li>/gi) || [];
@@ -210,7 +216,7 @@ function search(query, page, opts) {
     ? SITE + '/page/' + p + '/?s=' + encodeURIComponent(q)
     : SITE + '/?s=' + encodeURIComponent(q);
 
-  return _get(url, SITE + '/', 4000).then(function (html) {
+  return _get(url, SITE + '/', 3000).then(function (html) {
     return _parseCardItems(html);
   }).catch(function () { return []; });
 }
@@ -225,7 +231,7 @@ function getHome(opts) {
   ];
 
   var tasks = sections.map(function (sec) {
-    return _get(sec.url, SITE + '/', 4000).then(function (html) {
+    return _get(sec.url, SITE + '/', 3000).then(function (html) {
       var cards = _parseCardItems(html);
       return { title: sec.title, items: cards.slice(0, 24) };
     }).catch(function () {
@@ -245,7 +251,7 @@ function getHome(opts) {
 // ── Detail & Episodes ────────────────────────────────────────────────────────
 function getDetail(url, opts) {
   var fullUrl = _ensureAbsolute(url);
-  return _get(fullUrl, SITE + '/', 4000).then(function (html) {
+  return _get(fullUrl, SITE + '/', 3000).then(function (html) {
     if (!html) return Promise.reject(new Error('Samehadaku: detail page not found'));
 
     // If an episode URL is passed directly, redirect to parent anime series
@@ -256,7 +262,6 @@ function getDetail(url, opts) {
       if (allEpMatch && allEpMatch[1] && allEpMatch[1] !== fullUrl) {
         return getDetail(allEpMatch[1], opts);
       }
-      // Derive series slug from episode URL (e.g. /one-piece-episode-1175/ -> /anime/one-piece/)
       var cleanSlug = fullUrl.replace(/\/$/, '').split('/').pop();
       var seriesSlug = cleanSlug.replace(/-episode-(?:[0-9]+|movie|special|ova|end)(?:-[a-z0-9]+)*$/i, '');
       if (seriesSlug && seriesSlug !== cleanSlug) {
@@ -317,64 +322,58 @@ function getDetail(url, opts) {
       if (st) studios.push(st);
     }
 
-    // ── Robust Episode Extraction ────────────────────────────────────────────
+    // ── Parse Episode List ───────────────────────────────────────────────────
     var episodes = [];
     var seenEp = {};
+    var epLists = html.split(/class=["'](?:lstepsiode|listeps|episodelist)[^"']*["']/i);
 
-    // 1. Check inside .lstepsiode / .listeps container if available
-    var block = html;
-    var containerMatch = html.match(/<div[^>]*class=["'](?:lstepsiode|listeps|episodelist)[^"']*["'][\s\S]*?<\/ul>/i)
-      || html.match(/<ul[^>]*class=["'](?:lstepsiode|listeps|episodelist)[^"']*["'][\s\S]*?<\/ul>/i);
-    if (containerMatch) {
-      block = containerMatch[0];
+    for (var i = 1; i < epLists.length; i++) {
+      var block = epLists[i].split('</ul>')[0];
+      var liItems = block.split('<li');
+      for (var j = 1; j < liItems.length; j++) {
+        var item = liItems[j];
+        var linkMatch = item.match(/<span class=["']lchx["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
+          || item.match(/<div class=["']epsright["']><span class=["']eps["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
+          || item.match(/<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+
+        if (!linkMatch) continue;
+        var epUrl = _ensureAbsolute(linkMatch[1]);
+        if (seenEp[epUrl]) continue;
+        if (
+          epUrl.indexOf('/anime/') > -1 ||
+          epUrl.indexOf('/genre/') > -1 ||
+          epUrl.indexOf('/season/') > -1 ||
+          epUrl.indexOf('/studio/') > -1 ||
+          epUrl.indexOf('/producer/') > -1 ||
+          epUrl.indexOf('daftar-batch') > -1 ||
+          epUrl.indexOf('pembatas-episode') > -1 ||
+          epUrl.indexOf('facebook.com') > -1 ||
+          epUrl.indexOf('twitter.com') > -1 ||
+          epUrl.indexOf('whatsapp') > -1 ||
+          epUrl.indexOf('telegram') > -1
+        ) continue;
+        seenEp[epUrl] = 1;
+
+        var rawEpTitle = linkMatch[2];
+        var epTitle = _cleanTitle(rawEpTitle);
+        var dateMatch = item.match(/<span class=["']date["'][^>]*>([^<]+)<\/span>/i);
+        var rawDate = dateMatch ? dateMatch[1] : '';
+        var epDate = rawDate ? (typeof htmlText === 'function' ? htmlText(rawDate) : _decodeEntities(rawDate)) : null;
+
+        var numMatch = epTitle.match(/Episode\s+(\d+)/i) || epUrl.match(/episode-(\d+)/i) || epTitle.match(/(\d+)/);
+        var num = numMatch ? parseInt(numMatch[1], 10) : (episodes.length + 1);
+
+        episodes.push({
+          id: epUrl,
+          number: num,
+          title: epTitle || ('Episode ' + num),
+          url: epUrl,
+          date: epDate || null
+        });
+      }
     }
 
-    var rows = block.match(/<li[^>]*>[\s\S]*?<\/li>/gi)
-      || block.match(/<div class=["']epsright["'][\s\S]*?(?:<\/li>|(?=<div class=["']epsright))/gi) || [];
-
-    for (var i = 0; i < rows.length; i++) {
-      var row = rows[i];
-      var linkMatch = row.match(/<span class=["']lchx["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
-        || row.match(/<div class=["']epsright["']><span class=["']eps["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
-        || row.match(/<a\s+href=["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
-
-      if (!linkMatch) continue;
-      var epUrl = _ensureAbsolute(linkMatch[1]);
-      if (seenEp[epUrl]) continue;
-      if (
-        epUrl.indexOf('/anime/') > -1 ||
-        epUrl.indexOf('/genre/') > -1 ||
-        epUrl.indexOf('/season/') > -1 ||
-        epUrl.indexOf('/studio/') > -1 ||
-        epUrl.indexOf('/producer/') > -1 ||
-        epUrl.indexOf('daftar-batch') > -1 ||
-        epUrl.indexOf('pembatas-episode') > -1 ||
-        epUrl.indexOf('facebook.com') > -1 ||
-        epUrl.indexOf('twitter.com') > -1 ||
-        epUrl.indexOf('whatsapp') > -1 ||
-        epUrl.indexOf('telegram') > -1
-      ) continue;
-      seenEp[epUrl] = 1;
-
-      var rawEpTitle = linkMatch[2];
-      var epTitle = _cleanTitle(rawEpTitle);
-      var dateMatch = row.match(/<span class=["']date["'][^>]*>([^<]+)<\/span>/i);
-      var rawDate = dateMatch ? dateMatch[1] : '';
-      var epDate = rawDate ? (typeof htmlText === 'function' ? htmlText(rawDate) : _decodeEntities(rawDate)) : null;
-
-      var numMatch = epTitle.match(/Episode\s+(\d+)/i) || epUrl.match(/episode-(\d+)/i) || epTitle.match(/(\d+)/);
-      var num = numMatch ? parseInt(numMatch[1], 10) : (episodes.length + 1);
-
-      episodes.push({
-        id: epUrl,
-        number: num,
-        title: epTitle || ('Episode ' + num),
-        url: epUrl,
-        date: epDate
-      });
-    }
-
-    // 2. Fallback for single movie/special anime pages
+    // Single Movie fallback if no episode list container found
     if (episodes.length === 0) {
       var playerLink = html.match(/<a[^>]+href=["'](https?:\/\/[^"']*(?:movie|special|episode)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i);
       if (playerLink && playerLink[1] && playerLink[1].indexOf('/anime/') === -1) {
@@ -449,7 +448,7 @@ function _extractFromEmbed(embedUrl, ref, qualityHint) {
 
   // Wibufile embed
   if (u.indexOf('wibufile.com/embed') > -1) {
-    return _get(u, ref, 4000).then(function (html) {
+    return _get(u, ref, 3000).then(function (html) {
       var sourcesMatch = html.match(/sources\s*:\s*(\[[^\]]+\])/i)
         || html.match(/file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i);
       if (sourcesMatch) {
@@ -488,7 +487,7 @@ function _extractFromEmbed(embedUrl, ref, qualityHint) {
 
   // Vidhide / Vidlion
   if (u.indexOf('vidhide') > -1 || u.indexOf('vidlion') > -1) {
-    return _get(u, ref, 4000).then(function (html) {
+    return _get(u, ref, 3000).then(function (html) {
       var unpacked = html;
       if (/eval\(function\(p,a,c,k,e/.test(html)) {
         unpacked = _unpack(html);
@@ -516,7 +515,7 @@ function _extractFromEmbed(embedUrl, ref, qualityHint) {
 
 function getVideoSources(episodeUrl) {
   var fullUrl = _ensureAbsolute(episodeUrl);
-  return _get(fullUrl, SITE + '/', 4000).then(function (html) {
+  return _get(fullUrl, SITE + '/', 3000).then(function (html) {
     if (!html) return Promise.reject(new Error('Samehadaku: episode page not found'));
 
     var serverTasks = [];
@@ -534,7 +533,7 @@ function getVideoSources(episodeUrl) {
             SITE + '/wp-admin/admin-ajax.php',
             { action: 'player_ajax', post: post, nume: nume, type: type },
             fullUrl,
-            4000
+            3000
           ).then(function (ajaxRes) {
             if (!ajaxRes) return [];
             var iframeSrc = (ajaxRes.match(/src=["']([^"']+)["']/i) || [])[1] || '';
@@ -590,7 +589,6 @@ function getVideoSources(episodeUrl) {
         return Promise.reject(new Error('Samehadaku: no playable streams found'));
       }
 
-      // Sort: 1080p > 720p > 480p > 360p, HLS slightly preferred
       all.sort(function (a, b) {
         var aNum = parseInt(a.quality, 10) || (a.quality === '4k' ? 2160 : 0);
         var bNum = parseInt(b.quality, 10) || (b.quality === '4k' ? 2160 : 0);
@@ -602,15 +600,4 @@ function getVideoSources(episodeUrl) {
       return all;
     });
   });
-}
-
-if (typeof module !== 'undefined') {
-  module.exports = {
-    getInfo: getInfo,
-    getHome: getHome,
-    search: search,
-    getDetail: getDetail,
-    getEpisodes: getEpisodes,
-    getVideoSources: getVideoSources
-  };
 }
