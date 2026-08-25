@@ -416,7 +416,6 @@ var SEARCH_GQL = 'query( $search: SearchInput $limit: Int $page: Int $translatio
 var SHOW_GQL = 'query ($showId: String!) { show( _id: $showId ) { _id name englishName thumbnail description malId availableEpisodes availableEpisodesDetail }}';
 var POPULAR_GQL = 'query($type:VaildPopularTypeEnumType!,$size:Int!,$dateRange:Int,$page:Int,$allowAdult:Boolean,$allowUnknown:Boolean){queryPopular(type:$type,size:$size,dateRange:$dateRange,page:$page,allowAdult:$allowAdult,allowUnknown:$allowUnknown){recommendations{anyCard{_id name englishName thumbnail availableEpisodes __typename}}}}';
 var EPISODE_GQL = 'query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}';
-var EPISODE_INFOS_GQL = 'query ($showId: String!, $episodeNumStart: Float!, $episodeNumEnd: Float!) { episodeInfos( showId: $showId episodeNumStart: $episodeNumStart episodeNumEnd: $episodeNumEnd ) { episodeIdNum notes thumbnails vidInforssub vidInforsdub vidInforsraw }}';
 
 function _headers() { return { 'Referer': REFERER, 'Origin': ORIGIN, 'User-Agent': UA, 'Content-Type': 'application/json' }; }
 
@@ -436,7 +435,7 @@ function _post(query, variables, endpoint) {
 }
 
 function getInfo() {
-  return { name: 'AllAnime', lang: 'en', baseUrl: 'https://allanime.to', logo: 'https://allanime.to/favicon.ico', type: 'anime', version: '1.0.6' };
+  return { name: 'AllAnime', lang: 'en', baseUrl: 'https://allanime.to', logo: 'https://allanime.to/favicon.ico', type: 'anime', version: '1.0.7' };
 }
 
 // ── Episode thumbnails (Kitsu, keyed by the show's malId) ────────────────────
@@ -589,83 +588,84 @@ function _decryptTobeparsed(b64, keys) {
     });
 }
 
+function _parseSourcesFromText(text, keys) {
+  if (!text) return null;
+  if (text.indexOf('"tobeparsed"') !== -1) {
+    var m = text.match(/"tobeparsed"\s*:\s*"([^"]+)"/);
+    if (m) return _decryptTobeparsed(m[1], keys);
+  }
+  var j; try { j = JSON.parse(text); } catch (e) { j = null; }
+  var data = j && j.data;
+  if (data && data.tobeparsed) return _decryptTobeparsed(data.tobeparsed, keys);
+  if (data && data.episode && data.episode.sourceUrls) return data.episode.sourceUrls;
+  if (j && j.sourceUrls) return j.sourceUrls;
+  return null;
+}
+
 function _fetchSourceUrls(showId, mode, epNo) {
   return _fetchAAKeys().then(function (keys) {
-    // 1. Try Persisted Query GET with aaReq
-    return _buildAAReq(SOURCES_HASH, keys)
-      .then(function (aaReq) {
-        var vars = JSON.stringify({ showId: showId, translationType: mode, episodeString: String(epNo) });
-        var ext = JSON.stringify({
-          persistedQuery: { version: 1, sha256Hash: SOURCES_HASH },
-          aaReq: aaReq
-        });
-        var url = API + '?variables=' + encodeURIComponent(vars) + '&extensions=' + encodeURIComponent(ext);
+    return _buildAAReq(SOURCES_HASH, keys).then(function (aaReq) {
+      var vars = JSON.stringify({ showId: showId, translationType: mode, episodeString: String(epNo) });
+      var ext = JSON.stringify({
+        persistedQuery: { version: 1, sha256Hash: SOURCES_HASH },
+        aaReq: aaReq
+      });
 
-        return fetch(url, { headers: { 'Referer': REFERER, 'Origin': ORIGIN, 'User-Agent': UA }, timeoutMs: 8000 })
-          .then(function (r) {
-            if (!r.ok) return null;
-            var j; try { j = JSON.parse(r.body || 'null'); } catch (e) { return null; }
-            var data = j && j.data;
-            if (data && data.tobeparsed) return _decryptTobeparsed(data.tobeparsed, keys);
-            if (data && data.episode && data.episode.sourceUrls) return data.episode.sourceUrls;
-            return null;
-          })
-          .catch(function () { return null; });
-      })
-      .then(function (sources) {
-        if (sources && sources.length) return sources;
+      // 1. Try Persisted Query GET with native CF solver (browser: true)
+      var getUrl = API + '?variables=' + encodeURIComponent(vars) + '&extensions=' + encodeURIComponent(ext);
+      var getHeaders = { 'Referer': REFERER, 'Origin': ORIGIN };
 
-        // 2. Fallback: GraphQL POST with episode query & aaReq
-        return _buildAAReq(SOURCES_HASH, keys).then(function (aaReq) {
-          var vars = { showId: showId, translationType: mode, episodeString: String(epNo) };
-          var body = JSON.stringify({
-            query: EPISODE_GQL,
-            variables: vars,
-            extensions: { aaReq: aaReq }
-          });
-          return fetch(API, { method: 'POST', headers: _headers(), body: body, timeoutMs: 8000 })
+      return fetch(getUrl, { headers: getHeaders, browser: true, timeoutMs: 12000 })
+        .then(function (r) {
+          return _parseSourcesFromText(r.body, keys);
+        })
+        .catch(function () { return null; })
+        .then(function (sources) {
+          if (sources && sources.length) return sources;
+
+          // 2. Try Persisted Query GET standard fetch
+          return fetch(getUrl, { headers: _headers(), timeoutMs: 8000 })
             .then(function (r) {
-              if (!r.ok) return null;
-              var j; try { j = JSON.parse(r.body || 'null'); } catch (e) { return null; }
-              var data = j && j.data;
-              if (data && data.tobeparsed) return _decryptTobeparsed(data.tobeparsed, keys);
-              if (data && data.episode && data.episode.sourceUrls) return data.episode.sourceUrls;
-              return null;
+              return _parseSourcesFromText(r.body, keys);
             })
             .catch(function () { return null; });
-        });
-      })
-      .then(function (sources) {
-        if (sources && sources.length) return sources;
+        })
+        .then(function (sources) {
+          if (sources && sources.length) return sources;
 
-        // 3. Fallback: GraphQL episodeInfos (unprotected against captcha)
-        var num = parseFloat(epNo) || 1.0;
-        var vars = { showId: showId, episodeNumStart: num, episodeNumEnd: num };
-        return _post(EPISODE_INFOS_GQL, vars).then(function (j) {
-          var infos = (j && j.data && j.data.episodeInfos) || [];
-          var info = infos[0];
-          if (!info) throw new Error('AllAnime: no sources in response');
+          // 3. Try GraphQL POST with browser: true
+          var postBody = JSON.stringify({
+            query: EPISODE_GQL,
+            variables: { showId: showId, translationType: mode, episodeString: String(epNo) },
+            extensions: { aaReq: aaReq }
+          });
+          return fetch(API, { method: 'POST', headers: { 'Referer': REFERER, 'Origin': ORIGIN, 'Content-Type': 'application/json' }, body: postBody, browser: true, timeoutMs: 12000 })
+            .then(function (r) {
+              return _parseSourcesFromText(r.body, keys);
+            })
+            .catch(function () { return null; });
+        })
+        .then(function (sources) {
+          if (sources && sources.length) return sources;
 
-          var vidObj = (mode === 'dub') ? (info.vidInforsdub || info.vidInforssub) : (info.vidInforssub || info.vidInforsdub);
-          var out = [];
-          if (vidObj && vidObj.vidPath) {
-            out.push({
-              sourceName: 'AllAnime-CDN',
-              sourceUrl: vidObj.vidPath,
-              priority: 100,
-              type: 'player',
-              resolutionStr: vidObj.vidResolution ? (vidObj.vidResolution + 'p') : '1080p'
-            });
-          }
-          if (out.length === 0) throw new Error('AllAnime: no sources in response');
-          return out;
+          // 4. Try scraping watch page via browser bridge
+          var watchUrl = 'https://allanime.to/anime/' + showId + '/ep-' + epNo + '-' + mode;
+          return fetch(watchUrl, { headers: { 'Referer': 'https://allanime.to/' }, browser: true, timeoutMs: 15000 })
+            .then(function (r) {
+              return _parseSourcesFromText(r.body, keys);
+            })
+            .catch(function () { return null; });
+        })
+        .then(function (sources) {
+          if (sources && sources.length) return sources;
+          throw new Error('AllAnime: no sources in response');
         });
-      });
+    });
   });
 }
 
 function _resolveClock(path, mode) {
-  var hosts = ['https://allanime.day', 'https://tools.allmanga.to'];
+  var hosts = ['https://allanime.day', 'https://tools.allmanga.to', 'https://api.allanime.day'];
   function tryHost(idx) {
     if (idx >= hosts.length) return Promise.resolve([]);
     var base = hosts[idx];
@@ -679,7 +679,7 @@ function _resolveClock(path, mode) {
           var isHls = lk.hls === true || /\.m3u8/.test(u) || /repackager\.wixmp/.test(u);
           out.push({
             url: u,
-            quality: lk.resolutionStr || '',
+            quality: lk.resolutionStr || (isHls ? 'auto' : '1080p'),
             container: isHls ? 'hls' : 'mp4',
             headers: { 'Referer': REFERER, 'User-Agent': UA },
             kind: mode,
@@ -741,26 +741,21 @@ function getVideoSources(episodeUrl) {
         continue;
       }
 
-      // 2. Direct CDN path or full URL
-      var streamUrl = raw;
-      if (streamUrl.indexOf('/') === 0) {
-        streamUrl = 'https://allanime.day' + streamUrl;
-      }
+      // 2. Direct stream or embed extractor
+      if (!/^https?:\/\//.test(raw)) continue;
 
-      if (!/^https?:\/\//.test(streamUrl)) continue;
-
-      if (type === 'player' || /\.(m3u8|mp4)(\?|$)/i.test(streamUrl)) {
+      if (type === 'player' || /\.(m3u8|mp4)(\?|$)/i.test(raw)) {
         jobs.push(Promise.resolve([{
-          url: streamUrl,
+          url: raw,
           quality: su.resolutionStr || '1080p',
-          container: /\.m3u8/i.test(streamUrl) ? 'hls' : 'mp4',
+          container: /\.m3u8/i.test(raw) ? 'hls' : 'mp4',
           headers: hdr,
           kind: mode,
           audioLang: mode === 'dub' ? 'en' : 'ja',
           subtitles: []
         }]));
       } else {
-        jobs.push(extractVideo(streamUrl, { headers: hdr, kind: mode, audioLang: mode === 'dub' ? 'en' : 'ja' }).catch(function () { return []; }));
+        jobs.push(extractVideo(raw, { headers: hdr, kind: mode, audioLang: mode === 'dub' ? 'en' : 'ja' }).catch(function () { return []; }));
       }
     }
 
