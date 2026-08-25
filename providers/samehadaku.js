@@ -5,7 +5,7 @@ var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID)
 
 var SITE = 'https://v2.samehadaku.how';
 var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-  + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  + '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 function getInfo() {
   return {
@@ -14,13 +14,12 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2024/07/logo-samehadaku-2.png',
     type: 'anime',
-    version: '1.0.2'
+    version: '1.0.3'
   };
 }
 
-function _decodeEntities(str) {
-  if (!str) return '';
-  return String(str)
+function _cleanTitle(t) {
+  return String(t || '')
     .replace(/<[^>]+>/g, '')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -34,6 +33,8 @@ function _decodeEntities(str) {
     .replace(/&#8220;/g, '“')
     .replace(/&#8221;/g, '”')
     .replace(/&#8230;/g, '…')
+    .replace(/\s*(Subtitle Indonesia|Sub Indo)\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -78,35 +79,6 @@ function _post(url, data, ref, timeoutMs) {
     .catch(function () { return ''; });
 }
 
-function _cleanTitle(t) {
-  var s = typeof htmlText === 'function' ? htmlText(t) : _decodeEntities(t);
-  return String(s || '')
-    .replace(/\s*(?:Subtitle Indonesia|Sub Indo)\s*/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function _ensureAbsolute(u) {
-  if (!u) return '';
-  var s = String(u).trim();
-  if (s.indexOf('http://') === 0 || s.indexOf('https://') === 0) {
-    if (s.indexOf('/anime/') > -1 && !/\/$/.test(s)) s += '/';
-    return s;
-  }
-  if (s.indexOf('//') === 0) return 'https:' + s;
-  if (s.indexOf('/') === 0) {
-    var res = SITE + s;
-    if (res.indexOf('/anime/') > -1 && !/\/$/.test(res)) res += '/';
-    return res;
-  }
-  if (s.indexOf('anime/') === 0) {
-    var res2 = SITE + '/' + s;
-    if (!/\/$/.test(res2)) res2 += '/';
-    return res2;
-  }
-  return SITE + '/anime/' + s.replace(/^\/+|\/+$/g, '') + '/';
-}
-
 function _unpack(code) {
   try {
     var match = code.match(/eval\s*\(\s*function\s*\([^\)]*\)\s*\{[\s\S]*?\}\s*\(\s*['"]([\s\S]*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([\s\S]*?)['"]\s*\.split\(/i)
@@ -137,76 +109,6 @@ function _unpack(code) {
   }
 }
 
-function _parseCardItems(html) {
-  var out = [], seen = {};
-
-  var articles = html.match(/<article[\s\S]*?<\/article>/gi)
-    || html.match(/<div class=["']animposx["'][\s\S]*?<\/div>\s*<\/div>/gi) || [];
-
-  for (var i = 0; i < articles.length; i++) {
-    var block = articles[i];
-    var linkMatch = block.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>/i)
-      || block.match(/<a[^>]+href=["']([^"']+)["'][^>]*title=["']([^"']+)["']/i);
-    if (!linkMatch) continue;
-    var aurl = _ensureAbsolute(linkMatch[1]);
-    if (seen[aurl]) continue;
-    seen[aurl] = 1;
-
-    var titleMatch = block.match(/<div class=["']title["']>[\s\S]*?<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>/i)
-      || block.match(/<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>/i)
-      || block.match(/title=["']([^"']+)["']/i)
-      || block.match(/alt=["']([^"']+)["']/i);
-    var rawTitle = titleMatch ? titleMatch[1] : '';
-    var title = _cleanTitle(rawTitle);
-    if (!title) continue;
-
-    var imgMatch = block.match(/<img[^>]+src=["']([^"']+)["']/i);
-    var cover = imgMatch ? _ensureAbsolute(imgMatch[1]) : null;
-
-    out.push({
-      id: aurl,
-      title: title,
-      url: aurl,
-      cover: cover,
-      type: 'anime',
-      sourceId: SOURCE_ID
-    });
-  }
-
-  if (out.length === 0) {
-    var listItems = html.match(/<li[^>]*itemscope[^>]*>[\s\S]*?<\/li>/gi)
-      || html.match(/<li[^>]*>[\s\S]*?<\/li>/gi) || [];
-    for (var j = 0; j < listItems.length; j++) {
-      var item = listItems[j];
-      var liLink = item.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>/i);
-      if (!liLink) continue;
-      var itemUrl = _ensureAbsolute(liLink[1]);
-      if (seen[itemUrl]) continue;
-      seen[itemUrl] = 1;
-
-      var liTitle = item.match(/<h2[^>]*class=["']entry-title["'][^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)
-        || item.match(/title=["']([^"']+)["']/i);
-      var rawLiTitle = liTitle ? liTitle[1] : '';
-      var itTitle = _cleanTitle(rawLiTitle);
-      if (!itTitle) continue;
-
-      var liImg = item.match(/<img[^>]+src=["']([^"']+)["']/i);
-      var itCover = liImg ? _ensureAbsolute(liImg[1]) : null;
-
-      out.push({
-        id: itemUrl,
-        title: itTitle,
-        url: itemUrl,
-        cover: itCover,
-        type: 'anime',
-        sourceId: SOURCE_ID
-      });
-    }
-  }
-
-  return out;
-}
-
 // ── Search ───────────────────────────────────────────────────────────────────
 function search(query, page, opts) {
   var q = String(query || '').trim();
@@ -217,7 +119,41 @@ function search(query, page, opts) {
     : SITE + '/?s=' + encodeURIComponent(q);
 
   return _get(url, SITE + '/', 3000).then(function (html) {
-    return _parseCardItems(html);
+    var out = [], seen = {};
+    var articles = html.match(/<article[\s\S]*?<\/article>/gi)
+      || html.match(/<div class=["']animposx["'][\s\S]*?<\/div>\s*<\/div>/gi) || [];
+
+    for (var i = 0; i < articles.length; i++) {
+      var block = articles[i];
+      var linkMatch = block.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>/i)
+        || block.match(/<a[^>]+href=["']([^"']+)["'][^>]*title=["']([^"']+)["']/i);
+      if (!linkMatch) continue;
+      var aurl = linkMatch[1];
+      if (aurl.indexOf('http') !== 0) aurl = SITE + aurl;
+      if (seen[aurl]) continue;
+      seen[aurl] = 1;
+
+      var titleMatch = block.match(/<div class=["']title["']>[\s\S]*?<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>/i)
+        || block.match(/<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>/i)
+        || block.match(/title=["']([^"']+)["']/i)
+        || block.match(/alt=["']([^"']+)["']/i);
+      var title = _cleanTitle(titleMatch ? titleMatch[1] : '');
+      if (!title) continue;
+
+      var imgMatch = block.match(/<img[^>]+src=["']([^"']+)["']/i);
+      var cover = imgMatch ? imgMatch[1] : null;
+      if (cover && cover.indexOf('http') !== 0) cover = SITE + cover;
+
+      out.push({
+        id: aurl,
+        title: title,
+        url: aurl,
+        cover: cover,
+        type: 'anime',
+        sourceId: SOURCE_ID
+      });
+    }
+    return out;
   }).catch(function () { return []; });
 }
 
@@ -232,8 +168,41 @@ function getHome(opts) {
 
   var tasks = sections.map(function (sec) {
     return _get(sec.url, SITE + '/', 3000).then(function (html) {
-      var cards = _parseCardItems(html);
-      return { title: sec.title, items: cards.slice(0, 24) };
+      var out = [], seen = {};
+      var listItems = html.match(/<li[^>]*itemscope[^>]*>[\s\S]*?<\/li>/gi)
+        || html.match(/<article[\s\S]*?<\/article>/gi)
+        || html.match(/<li[^>]*>[\s\S]*?<\/li>/gi) || [];
+
+      for (var j = 0; j < listItems.length; j++) {
+        var item = listItems[j];
+        var liLink = item.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>/i)
+          || item.match(/<a[^>]+href=["']([^"']+)["'][^>]*title=["']([^"']+)["']/i);
+        if (!liLink) continue;
+        var itemUrl = liLink[1];
+        if (itemUrl.indexOf('http') !== 0) itemUrl = SITE + itemUrl;
+        if (seen[itemUrl]) continue;
+        seen[itemUrl] = 1;
+
+        var liTitle = item.match(/<h2[^>]*class=["']entry-title["'][^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i)
+          || item.match(/<div class=["']title["']>[\s\S]*?<h[2-4][^>]*>([\s\S]*?)<\/h[2-4]>/i)
+          || item.match(/title=["']([^"']+)["']/i);
+        var itTitle = _cleanTitle(liTitle ? liTitle[1] : '');
+        if (!itTitle) continue;
+
+        var liImg = item.match(/<img[^>]+src=["']([^"']+)["']/i);
+        var itCover = liImg ? liImg[1] : null;
+        if (itCover && itCover.indexOf('http') !== 0) itCover = SITE + itCover;
+
+        out.push({
+          id: itemUrl,
+          title: itTitle,
+          url: itemUrl,
+          cover: itCover,
+          type: 'anime',
+          sourceId: SOURCE_ID
+        });
+      }
+      return { title: sec.title, items: out.slice(0, 24) };
     }).catch(function () {
       return { title: sec.title, items: [] };
     });
@@ -250,83 +219,45 @@ function getHome(opts) {
 
 // ── Detail & Episodes ────────────────────────────────────────────────────────
 function getDetail(url, opts) {
-  var fullUrl = _ensureAbsolute(url);
-  return _get(fullUrl, SITE + '/', 3000).then(function (html) {
-    if (!html) return Promise.reject(new Error('Samehadaku: detail page not found'));
+  var aurl = String(url || '').trim();
+  if (aurl.indexOf('http') !== 0) {
+    if (aurl.indexOf('anime/') === 0) aurl = SITE + '/' + aurl;
+    else if (aurl.indexOf('/') === 0) aurl = SITE + aurl;
+    else aurl = SITE + '/anime/' + aurl + '/';
+  }
+  if (!/\/$/.test(aurl)) aurl += '/';
 
-    // If an episode URL is passed directly, redirect to parent anime series
-    if (html.indexOf('class="infoanime') === -1 && html.indexOf('class="anim-senction') === -1) {
-      var allEpMatch = html.match(/<div class=["']nvs nvsc["']><a\s+href=["']([^"']+)["'][^>]*>All Episode<\/a><\/div>/i)
-        || html.match(/<a[^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["'][^>]*>[\s\S]*?All Episode/i)
-        || html.match(/<a[^>]+class=["']series["'][^>]+href=["'](https?:\/\/[^"']+\/anime\/[^"']+)["']/i);
-      if (allEpMatch && allEpMatch[1] && allEpMatch[1] !== fullUrl) {
-        return getDetail(allEpMatch[1], opts);
-      }
-      var cleanSlug = fullUrl.replace(/\/$/, '').split('/').pop();
-      var seriesSlug = cleanSlug.replace(/-episode-(?:[0-9]+|movie|special|ova|end)(?:-[a-z0-9]+)*$/i, '');
-      if (seriesSlug && seriesSlug !== cleanSlug) {
-        return getDetail(SITE + '/anime/' + seriesSlug + '/', opts);
-      }
-    }
-
-    var rawMainTitle = (
+  return _get(aurl, SITE + '/', 3000).then(function (html) {
+    var title = _cleanTitle(
       (html.match(/<h1[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i) || [])[1]
-      || (html.match(/<h2[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h2>/i) || [])[1]
       || (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [])[1]
+      || (html.match(/<meta property=["']og:title["'] content=["']([^"']+)["']/i) || [])[1]
       || ''
     );
-    var title = _cleanTitle(rawMainTitle);
-
-    var rawJap = (
-      (html.match(/<span><b>Japanese<\/b>\s*([^<]+)<\/span>/i) || [])[1]
-      || (html.match(/<b>Japanese<\/b>\s*:?\s*([^<]+)/i) || [])[1]
-      || ''
-    );
-    var japanese = typeof htmlText === 'function' ? htmlText(rawJap) : _decodeEntities(rawJap);
-
-    var rawEng = (
-      (html.match(/<span><b>English<\/b>\s*([^<]+)<\/span>/i) || [])[1]
-      || (html.match(/<b>English<\/b>\s*:?\s*([^<]+)/i) || [])[1]
-      || ''
-    );
-    var english = typeof htmlText === 'function' ? htmlText(rawEng) : _decodeEntities(rawEng);
-
-    var posterMatch = html.match(/<div class=["']thumb["'][^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/i)
+    var japanese = _cleanTitle((html.match(/<span><b>Japanese<\/b>\s*([^<]+)<\/span>/i) || [])[1] || '');
+    var poster = (html.match(/<div class=["']thumb["'][^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/i)
       || html.match(/<img[^>]+class=["'][^"']*anmsa[^"']*["'][^>]+src=["']([^"']+)["']/i)
-      || html.match(/<img[^>]+class=["'][^"']*attachment-post-thumbnail[^"']*["'][^>]+src=["']([^"']+)["']/i);
-    var poster = posterMatch ? _ensureAbsolute(posterMatch[1]) : null;
+      || html.match(/<img[^>]+class=["'][^"']*attachment-post-thumbnail[^"']*["'][^>]+src=["']([^"']+)["']/i)
+      || html.match(/<meta property=["']og:image["'] content=["']([^"']+)["']/i) || [])[1] || null;
+    if (poster && poster.indexOf('http') !== 0) poster = SITE + poster;
 
-    var descMatch = html.match(/<div class=["']entry-content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
-      || html.match(/<div class=["']desc["'][^>]*>([\s\S]*?)<\/div>/i);
-    var rawDesc = descMatch ? descMatch[1] : '';
-    var synopsis = typeof htmlText === 'function' ? htmlText(rawDesc) : _decodeEntities(rawDesc);
-
+    var synopsis = _cleanTitle((html.match(/<div class=["']entry-content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || '');
     var statusRaw = ((html.match(/<b>Status<\/b>\s*([^<]+)/i) || [])[1] || '').toLowerCase();
-    var status = statusRaw.indexOf('ongoing') > -1 || statusRaw.indexOf('airing') > -1 ? 'ongoing'
-      : (statusRaw.indexOf('completed') > -1 || statusRaw.indexOf('complete') > -1 ? 'completed' : 'unknown');
+    var status = statusRaw.indexOf('ongoing') > -1 ? 'ongoing'
+      : (statusRaw.indexOf('complete') > -1 ? 'completed' : 'unknown');
 
     var genres = [];
-    var genreBlockMatch = html.match(/<div class=["']genre-info["'][^>]*>([\s\S]*?)<\/div>/i);
-    if (genreBlockMatch) {
-      var gm = genreBlockMatch[1].match(/<a[^>]*>([^<]+)<\/a>/gi) || [];
-      for (var g = 0; g < gm.length; g++) {
-        var gt = typeof htmlText === 'function' ? htmlText(gm[g]) : _decodeEntities(gm[g]);
-        if (gt) genres.push(gt);
-      }
+    var genreBlock = (html.match(/<div class=["']genre-info["'][^>]*>([\s\S]*?)<\/div>/i) || [])[1] || '';
+    var gMatch = genreBlock.match(/<a[^>]*>([^<]+)<\/a>/g) || [];
+    for (var g = 0; g < gMatch.length; g++) {
+      var gt = _cleanTitle(gMatch[g]);
+      if (gt) genres.push(gt);
     }
 
-    var studios = [];
-    var studioMatch = html.match(/<b>Studio<\/b>\s*<a[^>]*>([^<]+)<\/a>/i);
-    if (studioMatch) {
-      var st = typeof htmlText === 'function' ? htmlText(studioMatch[1]) : _decodeEntities(studioMatch[1]);
-      if (st) studios.push(st);
-    }
-
-    // ── Parse Episode List ───────────────────────────────────────────────────
     var episodes = [];
-    var seenEp = {};
-    var epLists = html.split(/class=["'](?:lstepsiode|listeps|episodelist)[^"']*["']/i);
+    var seen = {};
 
+    var epLists = html.split(/class=["'][^"']*lstepsiode[^"']*["']/i);
     for (var i = 1; i < epLists.length; i++) {
       var block = epLists[i].split('</ul>')[0];
       var liItems = block.split('<li');
@@ -335,54 +266,36 @@ function getDetail(url, opts) {
         var linkMatch = item.match(/<span class=["']lchx["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
           || item.match(/<div class=["']epsright["']><span class=["']eps["']><a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i)
           || item.match(/<a\s+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
-
         if (!linkMatch) continue;
-        var epUrl = _ensureAbsolute(linkMatch[1]);
-        if (seenEp[epUrl]) continue;
-        if (
-          epUrl.indexOf('/anime/') > -1 ||
-          epUrl.indexOf('/genre/') > -1 ||
-          epUrl.indexOf('/season/') > -1 ||
-          epUrl.indexOf('/studio/') > -1 ||
-          epUrl.indexOf('/producer/') > -1 ||
-          epUrl.indexOf('daftar-batch') > -1 ||
-          epUrl.indexOf('pembatas-episode') > -1 ||
-          epUrl.indexOf('facebook.com') > -1 ||
-          epUrl.indexOf('twitter.com') > -1 ||
-          epUrl.indexOf('whatsapp') > -1 ||
-          epUrl.indexOf('telegram') > -1
-        ) continue;
-        seenEp[epUrl] = 1;
+        var epUrl = linkMatch[1];
+        if (epUrl.indexOf('http') !== 0) epUrl = SITE + epUrl;
+        if (seen[epUrl]) continue;
+        if (epUrl.indexOf('/anime/') > -1 || epUrl.indexOf('daftar-batch') > -1 || epUrl.indexOf('pembatas-episode') > -1) continue;
+        seen[epUrl] = 1;
 
         var rawEpTitle = linkMatch[2];
-        var epTitle = _cleanTitle(rawEpTitle);
-        var dateMatch = item.match(/<span class=["']date["'][^>]*>([^<]+)<\/span>/i);
-        var rawDate = dateMatch ? dateMatch[1] : '';
-        var epDate = rawDate ? (typeof htmlText === 'function' ? htmlText(rawDate) : _decodeEntities(rawDate)) : null;
-
-        var numMatch = epTitle.match(/Episode\s+(\d+)/i) || epUrl.match(/episode-(\d+)/i) || epTitle.match(/(\d+)/);
+        var epDate = _cleanTitle((item.match(/<span class=["']date["'][^>]*>([^<]+)<\/span>/i) || [])[1] || '');
+        var numMatch = rawEpTitle.match(/Episode\s+(\d+)/i) || epUrl.match(/episode-(\d+)/i) || rawEpTitle.match(/(\d+)/);
         var num = numMatch ? parseInt(numMatch[1], 10) : (episodes.length + 1);
 
         episodes.push({
           id: epUrl,
           number: num,
-          title: epTitle || ('Episode ' + num),
+          title: _cleanTitle(rawEpTitle) || ('Episode ' + num),
           url: epUrl,
           date: epDate || null
         });
       }
     }
 
-    // Single Movie fallback if no episode list container found
     if (episodes.length === 0) {
       var playerLink = html.match(/<a[^>]+href=["'](https?:\/\/[^"']*(?:movie|special|episode)[^"']*)["'][^>]*>([\s\S]*?)<\/a>/i);
       if (playerLink && playerLink[1] && playerLink[1].indexOf('/anime/') === -1) {
-        var singleUrl = _ensureAbsolute(playerLink[1]);
         episodes.push({
-          id: singleUrl,
+          id: playerLink[1],
           number: 1,
           title: _cleanTitle(playerLink[2]) || 'Full Movie',
-          url: singleUrl,
+          url: playerLink[1],
           date: null
         });
       }
@@ -391,15 +304,15 @@ function getDetail(url, opts) {
     episodes.sort(function (a, b) { return a.number - b.number; });
 
     return {
-      id: fullUrl,
+      id: aurl,
       title: title || 'Untitled',
-      englishTitle: english || japanese || null,
+      englishTitle: japanese || null,
       cover: poster,
-      url: fullUrl,
+      url: aurl,
       description: synopsis,
       status: status,
       genres: genres,
-      studios: studios,
+      studios: [],
       type: 'anime',
       sourceId: SOURCE_ID,
       episodes: episodes,
@@ -514,7 +427,9 @@ function _extractFromEmbed(embedUrl, ref, qualityHint) {
 }
 
 function getVideoSources(episodeUrl) {
-  var fullUrl = _ensureAbsolute(episodeUrl);
+  var fullUrl = String(episodeUrl || '').trim();
+  if (fullUrl.indexOf('http') !== 0) fullUrl = SITE + '/' + fullUrl.replace(/^\/+/, '');
+
   return _get(fullUrl, SITE + '/', 3000).then(function (html) {
     if (!html) return Promise.reject(new Error('Samehadaku: episode page not found'));
 
