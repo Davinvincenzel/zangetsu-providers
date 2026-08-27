@@ -13,11 +13,15 @@ function _cleanTitle(t) {
 
 function _ensureAbsolute(u) {
   if (!u) return '';
+  u = String(u).trim();
+  u = u.replace(/^https?:\/\/ylnime\.com\/\?/, 'https://ylnime.com/index.php?');
+  u = u.replace(/^https?:\/\/ylnime\.com\/(view|series)\.php/, 'https://ylnime.com/index.php');
   if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) return u;
   if (u.indexOf('//') === 0) return 'https:' + u;
-  if (u.indexOf('/') === 0) return SITE + u;
+  if (u.indexOf('/?') === 0) return SITE + '/index.php' + u.slice(1);
   if (u.indexOf('?') === 0) return SITE + '/index.php' + u;
-  return SITE + '/' + u;
+  if (u.indexOf('/') === 0) return SITE + u;
+  return SITE + '/index.php?' + u;
 }
 
 async function _get(url, ref) {
@@ -34,7 +38,6 @@ function _parseCardsFromHtml(html) {
   const out = [];
   const seen = {};
 
-  // Method 1: Chunk split on series link
   const chunks = html.split(/href="([^"]*series=[^"]+)"/i);
   for (let i = 1; i < chunks.length; i += 2) {
     const rawLink = chunks[i];
@@ -59,6 +62,52 @@ function _parseCardsFromHtml(html) {
   return out;
 }
 
+function _generateQueries(opts) {
+  const queries = [];
+  const add = (q) => {
+    if (!q) return;
+    q = String(q).trim();
+    if (q && !queries.includes(q)) queries.push(q);
+  };
+
+  if (opts.query) add(opts.query);
+  if (opts.media) {
+    if (opts.media.romajiTitle) add(opts.media.romajiTitle);
+    if (opts.media.englishTitle) add(opts.media.englishTitle);
+    if (Array.isArray(opts.media.synonyms)) {
+      for (let s of opts.media.synonyms) add(s);
+    }
+  }
+
+  const current = queries.slice();
+  for (let q of current) {
+    // 4th Season -> Season 4
+    if (/(\d+)(?:st|nd|rd|th)\s*season/i.test(q)) {
+      add(q.replace(/(\d+)(?:st|nd|rd|th)\s*season/gi, 'Season $1'));
+      add(q.replace(/(\d+)(?:st|nd|rd|th)\s*season/gi, '$1'));
+    }
+    // Season 4 -> 4th Season
+    if (/season\s*(\d+)/i.test(q)) {
+      const num = q.match(/season\s*(\d+)/i)[1];
+      const ord = num === '1' ? '1st' : num === '2' ? '2nd' : num === '3' ? '3rd' : (num + 'th');
+      add(q.replace(/season\s*(\d+)/gi, ord + ' Season'));
+    }
+    // Strip season numbers to match root title
+    const noSeason = q.replace(/(\d+(?:st|nd|rd|th)?\s*season|season\s*\d+|part\s*\d+|cour\s*\d+)/gi, '')
+      .replace(/[:\-–—\s]+/g, ' ')
+      .trim();
+    if (noSeason && noSeason.length > 2) add(noSeason);
+
+    // Strip subtitle after colon
+    if (q.includes(':')) {
+      const beforeColon = q.split(':')[0].trim();
+      if (beforeColon.length > 2) add(beforeColon);
+    }
+  }
+
+  return queries;
+}
+
 class Provider {
   getSettings() {
     return {
@@ -68,39 +117,14 @@ class Provider {
   }
 
   async search(opts) {
-    const queries = [];
-    if (opts.query && opts.query.trim()) queries.push(opts.query.trim());
-    if (opts.media) {
-      if (opts.media.romajiTitle && !queries.includes(opts.media.romajiTitle.trim())) {
-        queries.push(opts.media.romajiTitle.trim());
-      }
-      if (opts.media.englishTitle && !queries.includes(opts.media.englishTitle.trim())) {
-        queries.push(opts.media.englishTitle.trim());
-      }
-      if (Array.isArray(opts.media.synonyms)) {
-        for (let s of opts.media.synonyms) {
-          if (s && !queries.includes(s.trim())) queries.push(s.trim());
-        }
-      }
-    }
-
+    const queries = _generateQueries(opts);
     const allResults = [];
     const seenUrls = {};
 
     for (let q of queries) {
       const url = SITE + '/index.php?search=' + encodeURIComponent(q);
       const html = await _get(url, SITE + '/index.php');
-      let cards = _parseCardsFromHtml(html);
-
-      // If no exact match and query has punctuation/colon, try simplified first part
-      if (cards.length === 0 && (q.includes(':') || q.includes('-') || q.includes(' '))) {
-        const simplified = q.split(/[:\-–—]/)[0].trim();
-        if (simplified.length > 2 && simplified !== q) {
-          const sUrl = SITE + '/index.php?search=' + encodeURIComponent(simplified);
-          const sHtml = await _get(sUrl, SITE + '/index.php');
-          cards = _parseCardsFromHtml(sHtml);
-        }
-      }
+      const cards = _parseCardsFromHtml(html);
 
       for (let c of cards) {
         if (!seenUrls[c.url]) {
