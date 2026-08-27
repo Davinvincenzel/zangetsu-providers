@@ -30,6 +30,35 @@ async function _get(url, ref) {
   }
 }
 
+function _parseCardsFromHtml(html) {
+  const out = [];
+  const seen = {};
+
+  // Method 1: Chunk split on series link
+  const chunks = html.split(/href="([^"]*series=[^"]+)"/i);
+  for (let i = 1; i < chunks.length; i += 2) {
+    const rawLink = chunks[i];
+    const after = chunks[i + 1] || '';
+    const fullUrl = _ensureAbsolute(rawLink);
+    if (seen[fullUrl]) continue;
+    seen[fullUrl] = 1;
+
+    const titleMatch = after.match(/<h6[^>]*class="[^"]*card-title[^"]*"[^>]*>([^<]+)<\/h6>/i)
+      || after.match(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/i);
+    const title = _cleanTitle(titleMatch ? titleMatch[1] : '');
+    if (!title || title.toLowerCase() === 'advertisement') continue;
+
+    out.push({
+      id: fullUrl,
+      title: title,
+      url: fullUrl,
+      subOrDub: 'sub'
+    });
+  }
+
+  return out;
+}
+
 class Provider {
   getSettings() {
     return {
@@ -39,56 +68,69 @@ class Provider {
   }
 
   async search(opts) {
-    const q = opts.query || (opts.media && (opts.media.romajiTitle || opts.media.englishTitle)) || '';
-    if (!q || !q.trim()) return [];
-
-    const url = SITE + '/index.php?search=' + encodeURIComponent(q.trim());
-    const html = await _get(url, SITE + '/index.php');
-    const out = [];
-    const seen = {};
-
-    const cardBlocks = html.match(/<div class="[^"]*col[^"]*"[\s\S]*?<\/div>\s*<\/div>/gi) || [];
-    for (let i = 0; i < cardBlocks.length; i++) {
-      const block = cardBlocks[i];
-      const linkMatch = block.match(/href="([^"]*series=[^"]+)"/i);
-      if (!linkMatch) continue;
-      const fullUrl = _ensureAbsolute(linkMatch[1]);
-      if (seen[fullUrl]) continue;
-      seen[fullUrl] = 1;
-
-      const titleMatch = block.match(/<h6[^>]*class="[^"]*card-title[^"]*"[^>]*>([^<]+)<\/h6>/i)
-        || block.match(/alt="([^"]+)"/i);
-      const title = _cleanTitle(titleMatch ? titleMatch[1] : 'Anime');
-      if (!title || title.toLowerCase() === 'advertisement') continue;
-
-      out.push({
-        id: fullUrl,
-        title: title,
-        url: fullUrl,
-        subOrDub: 'sub'
-      });
+    const queries = [];
+    if (opts.query && opts.query.trim()) queries.push(opts.query.trim());
+    if (opts.media) {
+      if (opts.media.romajiTitle && !queries.includes(opts.media.romajiTitle.trim())) {
+        queries.push(opts.media.romajiTitle.trim());
+      }
+      if (opts.media.englishTitle && !queries.includes(opts.media.englishTitle.trim())) {
+        queries.push(opts.media.englishTitle.trim());
+      }
+      if (Array.isArray(opts.media.synonyms)) {
+        for (let s of opts.media.synonyms) {
+          if (s && !queries.includes(s.trim())) queries.push(s.trim());
+        }
+      }
     }
 
-    return out;
+    const allResults = [];
+    const seenUrls = {};
+
+    for (let q of queries) {
+      const url = SITE + '/index.php?search=' + encodeURIComponent(q);
+      const html = await _get(url, SITE + '/index.php');
+      let cards = _parseCardsFromHtml(html);
+
+      // If no exact match and query has punctuation/colon, try simplified first part
+      if (cards.length === 0 && (q.includes(':') || q.includes('-') || q.includes(' '))) {
+        const simplified = q.split(/[:\-–—]/)[0].trim();
+        if (simplified.length > 2 && simplified !== q) {
+          const sUrl = SITE + '/index.php?search=' + encodeURIComponent(simplified);
+          const sHtml = await _get(sUrl, SITE + '/index.php');
+          cards = _parseCardsFromHtml(sHtml);
+        }
+      }
+
+      for (let c of cards) {
+        if (!seenUrls[c.url]) {
+          seenUrls[c.url] = 1;
+          allResults.push(c);
+        }
+      }
+
+      if (allResults.length > 0) break;
+    }
+
+    return allResults;
   }
 
   async findEpisodes(id) {
     const fullUrl = _ensureAbsolute(id);
     const html = await _get(fullUrl, SITE + '/index.php');
     const episodes = [];
-    const seenEp = {};
+    const seen = {};
 
-    const epTags = html.match(/<a\s+[^>]*href="[^"]*view=[^"]*"[^>]*>[\s\S]*?<\/a>/gi) || [];
-    for (let i = 0; i < epTags.length; i++) {
-      const tag = epTags[i];
-      const hrefMatch = tag.match(/href="([^"]*view=[^"]*)"/i);
-      if (!hrefMatch) continue;
-      const epUrl = _ensureAbsolute(hrefMatch[1]);
-      if (seenEp[epUrl]) continue;
-      seenEp[epUrl] = 1;
+    const chunks = html.split(/href="([^"]*(?:episode=|view=)[^"]*)"/i);
+    for (let i = 1; i < chunks.length; i += 2) {
+      const rawLink = chunks[i];
+      const after = chunks[i + 1] || '';
+      const epUrl = _ensureAbsolute(rawLink);
+      if (seen[epUrl]) continue;
+      seen[epUrl] = 1;
 
-      const labelMatch = tag.match(/<span[^>]*class="[^"]*fw-medium[^"]*"[^>]*>([\s\S]*?)<\/span>/i)
-        || tag.match(/Episode\s+(\d+)/i)
+      const labelMatch = after.match(/<span[^>]*class="[^"]*fw-medium[^"]*"[^>]*>([\s\S]*?)<\/span>/i)
+        || after.match(/Episode\s+(\d+)/i)
         || [null, 'Episode ' + (episodes.length + 1)];
       const epLabel = _cleanTitle(labelMatch[1] || labelMatch[0]);
       const numMatch = epLabel.match(/Episode\s+(\d+)/i) || epLabel.match(/(\d+)/);
@@ -97,7 +139,7 @@ class Provider {
       episodes.push({
         id: epUrl,
         number: num,
-        title: epLabel,
+        title: epLabel || `Episode ${num}`,
         url: epUrl
       });
     }
@@ -115,33 +157,44 @@ class Provider {
       || html.match(/streams\s*=\s*(\[[^\]]+\]);/i)
       || html.match(/(\[\s*\{[\s\S]*?"link"[\s\S]*?\}\s*\])/i);
 
-    if (!streamsMatch) throw new Error('YLnime: no stream found on episode page');
-
-    let rawList = [];
-    try {
-      rawList = JSON.parse(streamsMatch[1]);
-    } catch (e) {
-      throw new Error('YLnime: failed to parse stream list');
-    }
-
     const sources = [];
     const seen = {};
-    for (let i = 0; i < rawList.length; i++) {
-      const s = rawList[i];
-      if (!s || !s.link) continue;
-      const streamUrl = s.link.replace(/\\/g, '');
-      if (seen[streamUrl]) continue;
-      seen[streamUrl] = 1;
 
-      const isHls = /\.m3u8(\?|$)/i.test(streamUrl);
-      const q = s.reso || '720p';
+    if (streamsMatch) {
+      try {
+        const rawList = JSON.parse(streamsMatch[1]);
+        for (let i = 0; i < rawList.length; i++) {
+          const s = rawList[i];
+          if (!s || !s.link) continue;
+          const streamUrl = s.link.replace(/\\/g, '').trim();
+          if (seen[streamUrl]) continue;
+          seen[streamUrl] = 1;
 
-      sources.push({
-        url: streamUrl,
-        type: isHls ? 'm3u8' : 'mp4',
-        quality: q,
-        subtitles: []
-      });
+          const isHls = /\.m3u8(\?|$)/i.test(streamUrl);
+          const q = s.reso || '720p';
+
+          sources.push({
+            url: streamUrl,
+            type: isHls ? 'm3u8' : 'mp4',
+            quality: q,
+            subtitles: []
+          });
+        }
+      } catch (e) {}
+    }
+
+    // Fallback: direct iframe in page
+    if (sources.length === 0) {
+      const ifr = (html.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
+      if (ifr) {
+        const isHls = /\.m3u8(\?|$)/i.test(ifr);
+        sources.push({
+          url: ifr,
+          type: isHls ? 'm3u8' : 'mp4',
+          quality: '720p',
+          subtitles: []
+        });
+      }
     }
 
     if (!sources.length) throw new Error('YLnime: no playable streams found');
