@@ -1,7 +1,7 @@
 {
   "id": "allanime",
   "name": "AllAnime",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "onlinestream-provider",
   "language": "javascript",
   "lang": "en",

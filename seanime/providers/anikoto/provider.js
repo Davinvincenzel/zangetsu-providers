@@ -10,7 +10,7 @@ function _cleanTitle(og) {
   t = t.replace(/\s+Anime\s+Online.*$/i, '');
   t = t.replace(/\s+Watch\s+Online.*$/i, '');
   t = t.replace(/\s+Online\s+(with|free)\b.*$/i, '');
-  return t.trim();
+  return t.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 }
 
 async function _get(url, ref, xhr = false) {
@@ -35,18 +35,54 @@ async function _ajax(path) {
 
 function _parseServers(html) {
   const servers = [];
-  const re = /data-type="(\w+)"([\s\S]*?)(?=data-type="|$)/g;
-  let tm;
-  while ((tm = re.exec(html)) !== null) {
-    const type = tm[1];
-    const block = tm[2];
-    const lre = /data-link-id="([^"]+)"[^>]*>([^<]*)</g;
-    let lm;
-    while ((lm = lre.exec(block)) !== null) {
-      servers.push({ type: type, linkId: lm[1], name: (lm[2] || '').trim() });
-    }
+  const re = /data-link-id="([^"]+)"[^>]*>([^<]*)</g;
+  let lm;
+  while ((lm = re.exec(html)) !== null) {
+    servers.push({ linkId: lm[1], name: (lm[2] || '').trim() });
   }
   return servers;
+}
+
+function _generateQueries(opts) {
+  const queries = [];
+  const add = (q) => {
+    if (!q) return;
+    q = String(q).trim();
+    if (q && !queries.includes(q)) queries.push(q);
+  };
+
+  if (opts.query) add(opts.query);
+  if (opts.media) {
+    if (opts.media.romajiTitle) add(opts.media.romajiTitle);
+    if (opts.media.englishTitle) add(opts.media.englishTitle);
+    if (Array.isArray(opts.media.synonyms)) {
+      for (let s of opts.media.synonyms) add(s);
+    }
+  }
+
+  const current = queries.slice();
+  for (let q of current) {
+    if (/(\d+)(?:st|nd|rd|th)\s*season/i.test(q)) {
+      add(q.replace(/(\d+)(?:st|nd|rd|th)\s*season/gi, 'Season $1'));
+      add(q.replace(/(\d+)(?:st|nd|rd|th)\s*season/gi, '$1'));
+    }
+    if (/season\s*(\d+)/i.test(q)) {
+      const num = q.match(/season\s*(\d+)/i)[1];
+      const ord = num === '1' ? '1st' : num === '2' ? '2nd' : num === '3' ? '3rd' : (num + 'th');
+      add(q.replace(/season\s*(\d+)/gi, ord + ' Season'));
+    }
+    const noSeason = q.replace(/(\d+(?:st|nd|rd|th)?\s*season|season\s*\d+|part\s*\d+|cour\s*\d+)/gi, '')
+      .replace(/[:\-–—\s]+/g, ' ')
+      .trim();
+    if (noSeason && noSeason.length > 2) add(noSeason);
+
+    if (q.includes(':')) {
+      const beforeColon = q.split(':')[0].trim();
+      if (beforeColon.length > 2) add(beforeColon);
+    }
+  }
+
+  return queries;
 }
 
 class Provider {
@@ -58,32 +94,35 @@ class Provider {
   }
 
   async search(opts) {
-    const q = opts.query || (opts.media && (opts.media.englishTitle || opts.media.romajiTitle)) || '';
-    if (!q || !q.trim()) return [];
-
-    const url = `${SITE}/filter?keyword=${encodeURIComponent(q.trim())}`;
-    const html = await _get(url, SITE + '/');
+    const queries = _generateQueries(opts);
     const out = [];
     const seen = {};
 
-    const items = html.match(/<div class="[^"]*film-poster[^"]*"[\s\S]*?<h3 class="[^"]*film-name[^"]*"[\s\S]*?<\/h3>/gi) || [];
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      const linkMatch = it.match(/href="\/watch\/([^"?#]+)"/i);
-      if (!linkMatch) continue;
-      const slug = linkMatch[1];
-      if (seen[slug]) continue;
-      seen[slug] = 1;
+    for (let q of queries) {
+      const url = `${SITE}/filter?keyword=${encodeURIComponent(q)}`;
+      const html = await _get(url, SITE + '/');
+      const re = /<a[^>]+class="[^"]*\bname\b[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let m;
 
-      const titleMatch = it.match(/<a[^>]+title="([^"]+)"/i) || it.match(/>([^<]+)<\/a>/i);
-      const title = _cleanTitle(titleMatch ? titleMatch[1] : slug);
+      while ((m = re.exec(html)) !== null) {
+        const fullHref = m[1];
+        const rawTitle = m[2];
+        const slugMatch = fullHref.match(/\/watch\/([^/?#]+)/i);
+        if (!slugMatch) continue;
+        const slug = slugMatch[1].replace(/\/ep-\d+$/, '');
+        if (seen[slug]) continue;
+        seen[slug] = 1;
 
-      out.push({
-        id: slug,
-        title: title,
-        url: `${SITE}/watch/${slug}`,
-        subOrDub: 'both'
-      });
+        const title = _cleanTitle(rawTitle);
+        out.push({
+          id: slug,
+          title: title || slug,
+          url: `${SITE}/watch/${slug}`,
+          subOrDub: 'both'
+        });
+      }
+
+      if (out.length > 0) break;
     }
 
     return out;
@@ -125,10 +164,26 @@ class Provider {
     try {
       epData = JSON.parse(episode.id);
     } catch (e) {
-      throw new Error('AniKoto: invalid episode payload');
+      epData = {};
     }
 
-    const serverIds = epData.serverIds;
+    let serverIds = epData.serverIds;
+    const slug = epData.slug || String(episode.url || episode.id).replace(/^https?:\/\/[^/]+\/watch\//i, '').replace(/\/ep-\d+.*$/, '');
+    const epNum = epData.num || episode.number || 1;
+
+    if (!serverIds) {
+      const html = await _get(`${SITE}/watch/${encodeURIComponent(slug)}`, SITE + '/');
+      const animeId = (html.match(/data-id="(\d+)"/) || [])[1];
+      if (animeId) {
+        const j = await _ajax('/ajax/episode/list/' + animeId);
+        const lhtml = (j && typeof j.result === 'string') ? j.result : '';
+        const epMatch = lhtml.match(new RegExp(`<a[^>]+data-num=["']${epNum}["'][^>]+data-ids=["']([^"']+)["']`, 'i'))
+          || lhtml.match(new RegExp(`<a[^>]+data-ids=["']([^"']+)["'][^>]+data-num=["']${epNum}["']`, 'i'))
+          || lhtml.match(/data-ids="([^"]+)"/i);
+        if (epMatch) serverIds = epMatch[1];
+      }
+    }
+
     if (!serverIds) throw new Error('AniKoto: no server ids found');
 
     const j = await _ajax('/ajax/server/list?servers=' + encodeURIComponent(serverIds));
