@@ -1,0 +1,14 @@
+{
+  "id": "animekai",
+  "name": "AnimeKai",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "en",
+  "description": "AnimeKai streaming provider for Seanime (anikai.cc)",
+  "author": "Davinvincenzel",
+  "icon": "https://www3.anikai.cc/favicon.ico",
+  "website": "https://anikai.cc",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/animekai/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/animekai/provider.js"
+}

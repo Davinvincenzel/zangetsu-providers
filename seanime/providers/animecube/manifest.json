@@ -1,0 +1,14 @@
+{
+  "id": "animecube",
+  "name": "AnimeCube",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "zh",
+  "description": "AnimeCube Donghua (Chinese Anime) streaming provider for Seanime (animecube.live)",
+  "author": "Davinvincenzel",
+  "icon": "https://animecube.live/favicon.ico",
+  "website": "https://animecube.live",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/animecube/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/animecube/provider.js"
+}

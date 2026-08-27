@@ -1,0 +1,14 @@
+{
+  "id": "otakudesu",
+  "name": "Otakudesu",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "id",
+  "description": "Otakudesu streaming provider for Seanime (Indonesian Subtitle)",
+  "author": "Davinvincenzel",
+  "icon": "https://otakudesu.blog/wp-content/uploads/2017/06/Logo-1.png",
+  "website": "https://otakudesu.blog",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/otakudesu/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/otakudesu/provider.js"
+}

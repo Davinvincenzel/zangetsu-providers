@@ -1,0 +1,14 @@
+{
+  "id": "anikoto",
+  "name": "AniKoto",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "en",
+  "description": "AniKoto streaming provider for Seanime (anikoto.cz)",
+  "author": "Davinvincenzel",
+  "icon": "https://anikoto.cz/favicon.ico",
+  "website": "https://anikoto.cz",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/anikoto/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/anikoto/provider.js"
+}

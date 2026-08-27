@@ -1,0 +1,14 @@
+{
+  "id": "allanime",
+  "name": "AllAnime",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "en",
+  "description": "AllAnime streaming provider for Seanime (allanime.to / mkissa.to)",
+  "author": "Davinvincenzel",
+  "icon": "https://allanime.to/favicon.ico",
+  "website": "https://allanime.to",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/allanime/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/allanime/provider.js"
+}

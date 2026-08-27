@@ -1,0 +1,14 @@
+{
+  "id": "samehadaku",
+  "name": "Samehadaku",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "id",
+  "description": "Samehadaku streaming provider for Seanime (Indonesian Subtitle)",
+  "author": "Davinvincenzel",
+  "icon": "https://v2.samehadaku.how/wp-content/uploads/2024/07/logo-samehadaku-2.png",
+  "website": "https://v2.samehadaku.how",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/samehadaku/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/samehadaku/provider.js"
+}

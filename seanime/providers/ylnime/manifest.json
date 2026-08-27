@@ -1,0 +1,14 @@
+{
+  "id": "ylnime",
+  "name": "YLnime",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "id",
+  "description": "YLnime streaming provider for Seanime (Indonesian Subtitle)",
+  "author": "Davinvincenzel",
+  "icon": "https://ylnime.com/favicon-96x96.png",
+  "website": "https://ylnime.com",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/ylnime/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/ylnime/provider.js"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "hianime",
+  "name": "HiAnime",
+  "version": "1.0.0",
+  "type": "onlinestream-provider",
+  "language": "javascript",
+  "lang": "en",
+  "description": "HiAnime streaming provider for Seanime with multi-quality and subtitles",
+  "author": "Davinvincenzel",
+  "icon": "https://hianimes.se/favicon.ico",
+  "website": "https://hianimes.se",
+  "manifestURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/hianime/manifest.json",
+  "payloadURI": "https://raw.githubusercontent.com/Davinvincenzel/zangetsu-providers/main/seanime/providers/hianime/provider.js"
+}
