@@ -20,13 +20,13 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '2.0.1'
+    version: '2.0.2'
   };
 }
 
 function _get(url, ref, timeoutMs) {
   var h = { 'User-Agent': UA, 'Referer': ref || SITE + '/' };
-  return fetch(url, { headers: h, timeoutMs: timeoutMs || 2000 })
+  return fetch(url, { headers: h, timeoutMs: timeoutMs || 8000 })
     .then(function (r) { return r.body || ''; })
     .catch(function () { return ''; });
 }
@@ -50,7 +50,7 @@ function _post(url, data, ref, timeoutMs) {
     }
     body = pairs.join('&');
   }
-  return fetch(url, { method: 'POST', headers: h, body: body, timeoutMs: timeoutMs || 1500 })
+  return fetch(url, { method: 'POST', headers: h, body: body, timeoutMs: timeoutMs || 8000 })
     .then(function (r) {
       var j;
       try { j = JSON.parse(r.body || 'null'); } catch (e) { j = null; }
@@ -413,12 +413,12 @@ function _resolveAllMirrors(epHtml, episodeUrl) {
       // Resolve all selected mirrors in parallel
       var tasks = selected.map(function (c) {
         var payload = { id: c.parsed.id, i: c.parsed.i, q: c.parsed.q, nonce: nonce, action: streamAction };
-        return _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl, 1500).then(function (sRes) {
+        return _post(SITE + '/wp-admin/admin-ajax.php', payload, episodeUrl, 6000).then(function (sRes) {
           if (!sRes || !sRes.data) return [];
           var htmlBlock = _b64Decode(sRes.data);
           var ifrSrc = (htmlBlock.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
           if (!ifrSrc) return [];
-          return _extractFromEmbed(ifrSrc, episodeUrl, 1800).then(function (mSources) {
+          return _extractFromEmbed(ifrSrc, episodeUrl, 8000).then(function (mSources) {
             for (var k = 0; k < mSources.length; k++) {
               if (c.parsed.q) mSources[k].quality = c.parsed.q;
             }
@@ -447,7 +447,7 @@ function _resolveAllMirrors(epHtml, episodeUrl) {
 }
 
 function getVideoSources(episodeUrl) {
-  return _get(episodeUrl, SITE + '/', 2500).then(function (epHtml) {
+  return _get(episodeUrl, SITE + '/', 8000).then(function (epHtml) {
     if (!epHtml) return Promise.reject(new Error('Otakudesu: episode page not found'));
 
     // Always resolve ALL mirrors from all quality tabs (360p, 480p, 720p, 1080p)
