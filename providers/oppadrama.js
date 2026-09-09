@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.2'
+    version: '1.0.3'
   };
 }
 
@@ -410,11 +410,16 @@ function _parseMasterM3u8(masterUrl, content, ref) {
 }
 
 function _extractTurboVIP(embedUrl, ref) {
-  return _get(embedUrl, ref || SITE + '/', 6000).then(function (html) {
-    var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
-    if (!m3u8Match) return [];
+  var idMatch = embedUrl.match(/\/t\/([a-zA-Z0-9]+)/i);
+  var directM3u8 = idMatch ? ('https://cdn1.turboviplay.com/data3/' + idMatch[1] + '/' + idMatch[1] + '.m3u8') : null;
 
-    var masterUrl = m3u8Match[0];
+  var fetchUrl = embedUrl.replace(/emturbovid\.com/i, 'turbovidhls.com');
+
+  return _get(fetchUrl, ref || SITE + '/', 6000).then(function (html) {
+    var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
+    var masterUrl = m3u8Match ? m3u8Match[0] : directM3u8;
+    if (!masterUrl) return [];
+
     return _get(masterUrl, 'https://turbovidhls.com/', 5000).then(function (playlist) {
       if (playlist && playlist.indexOf('#EXT-X-STREAM-INF:') > -1) {
         return _parseMasterM3u8(masterUrl, playlist, 'https://turbovidhls.com/');
@@ -439,7 +444,20 @@ function _extractTurboVIP(embedUrl, ref) {
         label: 'TurboVIP (1080p)'
       }];
     });
-  }).catch(function () { return []; });
+  }).catch(function () {
+    if (directM3u8) {
+      return [{
+        url: directM3u8,
+        quality: '1080p',
+        container: 'hls',
+        headers: { 'User-Agent': UA, 'Referer': 'https://turbovidhls.com/' },
+        kind: 'sub',
+        audioLang: 'ko',
+        label: 'TurboVIP (1080p)'
+      }];
+    }
+    return [];
+  });
 }
 
 function _extractFileLions(embedUrl, ref) {
@@ -481,7 +499,7 @@ function _extractFromEmbed(embedUrl, ref) {
   }
 
   // 2. FileLions / Minochinos
-  if (/filelions|minochinos/i.test(embedUrl)) {
+  if (/filelions|minochinos|vidhide/i.test(embedUrl)) {
     return _extractFileLions(embedUrl, ref);
   }
 
@@ -524,11 +542,20 @@ function getVideoSources(episodeUrl) {
   return _get(aurl, SITE + '/', 8000).then(function (html) {
     if (!html) return Promise.reject(new Error('Oppadrama: episode page not found'));
 
+    // If a series overview page was passed instead of an episode page, resolve first episode
+    var hasMirror = html.match(/<select[^>]*class=["']mirror["']/i) || html.match(/class=["']player-embed["']/i);
+    if (!hasMirror) {
+      var epList = _extractEpisodes(html, aurl);
+      if (epList && epList.length > 0 && epList[0].url !== aurl) {
+        return getVideoSources(epList[0].url);
+      }
+    }
+
     var mirrorSelect = html.match(/<select[^>]*class=["']mirror["'][\s\S]*?<\/select>/i);
+    var mirrors = [];
 
     if (mirrorSelect) {
       var options = mirrorSelect[0].match(/<option[\s\S]*?<\/option>/gi) || [];
-      var mirrors = [];
 
       for (var i = 0; i < options.length; i++) {
         var opt = options[i];
@@ -542,12 +569,23 @@ function getVideoSources(episodeUrl) {
           mirrors.push({ name: name, embedUrl: srcMatch[1] });
         }
       }
+    }
 
+    // Also look for fallback links in download box (<div class="dlbox"> or <div class="soradl">)
+    var dlEmbeds = html.match(/href=["']https?:\/\/(?:minochinos\.com|vidhidepro\.com|filelions\.[a-z]+)\/(?:v|d)\/([a-zA-Z0-9]+)["']/gi) || [];
+    for (var d = 0; d < dlEmbeds.length; d++) {
+      var dm = dlEmbeds[d].match(/href=["']https?:\/\/[^"']+\/(?:v|d)\/([a-zA-Z0-9]+)["']/i);
+      if (dm) {
+        mirrors.push({ name: 'FileLions', embedUrl: 'https://minochinos.com/v/' + dm[1] });
+      }
+    }
+
+    if (mirrors.length > 0) {
       // Prioritize TurboVIP first (fastest Google CDN HLS multi-quality), then FileLions
       mirrors.sort(function (a, b) {
         var prio = function (n) {
           if (/turbo/i.test(n)) return 10;
-          if (/filelions|minochinos/i.test(n)) return 8;
+          if (/filelions|minochinos|vidhide/i.test(n)) return 8;
           if (/hydrax/i.test(n)) return 4;
           return 1;
         };
