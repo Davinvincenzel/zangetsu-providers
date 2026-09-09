@@ -118,6 +118,15 @@
       "lang": "id",
       "file": "providers/samehadaku.js",
       "nsfw": false
+    },
+    {
+      "id": "oppadrama",
+      "name": "Oppadrama",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "id",
+      "file": "providers/oppadrama.js",
+      "nsfw": false
     }
   ]
 }
