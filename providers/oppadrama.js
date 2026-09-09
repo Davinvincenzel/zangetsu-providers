@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.6'
+    version: '1.0.7'
   };
 }
 
@@ -340,107 +340,6 @@ function getEpisodes(url, opts) {
 }
 
 // ── Stream Extraction ────────────────────────────────────────────────────────
-function _parseMasterM3u8(masterUrl, content, ref) {
-  var sources = [];
-  var lines = content.split(/\r?\n/);
-  var currentQuality = null;
-
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].trim();
-    if (line.indexOf('#EXT-X-STREAM-INF:') === 0) {
-      var resMatch = line.match(/RESOLUTION=(\d+)x(\d+)/i);
-      if (resMatch) {
-        currentQuality = resMatch[2] + 'p';
-      } else {
-        currentQuality = '720p';
-      }
-    } else if (line && line.indexOf('#') !== 0 && currentQuality) {
-      var streamUrl = line;
-      if (streamUrl.indexOf('http') !== 0) {
-        var base = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
-        streamUrl = base + streamUrl;
-      }
-      sources.push({
-        url: streamUrl,
-        quality: currentQuality,
-        container: 'hls',
-        headers: { 'User-Agent': UA, 'Referer': ref || 'https://turbovidhls.com/' },
-        kind: 'sub',
-        audioLang: 'ko',
-        label: 'TurboVIP (' + currentQuality + ')'
-      });
-      currentQuality = null;
-    }
-  }
-
-  // Also include the master playlist as Auto
-  sources.push({
-    url: masterUrl,
-    quality: 'Auto',
-    container: 'hls',
-    headers: { 'User-Agent': UA, 'Referer': ref || 'https://turbovidhls.com/' },
-    kind: 'sub',
-    audioLang: 'ko',
-    label: 'TurboVIP (Auto)'
-  });
-
-  return sources;
-}
-
-function _extractTurboVIP(embedUrl, ref) {
-  var idMatch = embedUrl.match(/\/(?:t|embed|e)\/([a-zA-Z0-9_-]+)/i);
-  var directM3u8 = idMatch ? ('https://cdn1.turboviplay.com/data3/' + idMatch[1] + '/' + idMatch[1] + '.m3u8') : null;
-
-  if (directM3u8) {
-    return _get(directM3u8, 'https://turbovidhls.com/', 4000).then(function (playlist) {
-      if (playlist && playlist.indexOf('#EXT-X-STREAM-INF:') > -1) {
-        return _parseMasterM3u8(directM3u8, playlist, 'https://turbovidhls.com/');
-      }
-      return [{
-        url: directM3u8,
-        quality: '1080p',
-        container: 'hls',
-        headers: { 'User-Agent': UA, 'Referer': 'https://turbovidhls.com/' },
-        kind: 'sub',
-        audioLang: 'ko',
-        label: 'TurboVIP (1080p)'
-      }];
-    }).catch(function () {
-      var fetchUrl = embedUrl.replace(/emturbovid\.com/i, 'turbovidhls.com');
-      return _get(fetchUrl, ref || SITE + '/', 4000).then(function (html) {
-        var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
-        if (m3u8Match) {
-          return [{
-            url: m3u8Match[0],
-            quality: '1080p',
-            container: 'hls',
-            headers: { 'User-Agent': UA, 'Referer': 'https://turbovidhls.com/' },
-            kind: 'sub',
-            audioLang: 'ko',
-            label: 'TurboVIP (1080p)'
-          }];
-        }
-        return [];
-      }).catch(function () { return []; });
-    });
-  }
-
-  return _get(embedUrl, ref || SITE + '/', 4000).then(function (html) {
-    var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
-    if (m3u8Match) {
-      return [{
-        url: m3u8Match[0],
-        quality: '720p',
-        container: 'hls',
-        headers: { 'User-Agent': UA, 'Referer': embedUrl },
-        kind: 'sub',
-        audioLang: 'ko',
-        label: 'TurboVIP (720p)'
-      }];
-    }
-    return [];
-  }).catch(function () { return []; });
-}
 
 function _extractFileLions(embedUrl, ref) {
   return _get(embedUrl, ref || SITE + '/', 6000).then(function (html) {
@@ -456,10 +355,70 @@ function _extractFileLions(embedUrl, ref) {
     var k = strMatch[4].split('|');
     var unpacked = _unpack(p, a, c, k);
 
-    var m3u8 = unpacked.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
-    if (m3u8) {
+    var m3u8Match = unpacked.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
+    if (!m3u8Match) return [];
+
+    var masterUrl = m3u8Match[0];
+
+    return _get(masterUrl, embedUrl, 4000).then(function (playlist) {
+      if (!playlist || playlist.indexOf('#EXT-X-STREAM-INF:') === -1) {
+        return [{
+          url: masterUrl,
+          quality: '720p',
+          container: 'hls',
+          headers: { 'User-Agent': UA, 'Referer': embedUrl },
+          kind: 'sub',
+          audioLang: 'ko',
+          label: 'FileLions (720p)'
+        }];
+      }
+
+      var lines = playlist.split(/\r?\n/);
+      var variants = [];
+      var curRes = '720p';
+
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line) continue;
+
+        if (line.indexOf('#EXT-X-STREAM-INF:') === 0) {
+          var resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
+          if (resMatch) {
+            var h = parseInt(resMatch[1], 10);
+            curRes = h >= 1000 ? '1080p' : (h >= 700 ? '720p' : (h >= 460 ? '480p' : '360p'));
+          }
+          continue;
+        }
+
+        if (line.indexOf('#') !== 0) {
+          var sUrl = line;
+          if (!/^https?:\/\//i.test(sUrl)) {
+            var base = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
+            sUrl = base + sUrl;
+          }
+          variants.push({
+            url: sUrl,
+            quality: curRes,
+            container: 'hls',
+            headers: { 'User-Agent': UA, 'Referer': embedUrl },
+            kind: 'sub',
+            audioLang: 'ko',
+            label: 'FileLions (' + curRes + ')'
+          });
+          curRes = '720p';
+        }
+      }
+
+      if (variants.length > 0) {
+        var rank = { '1080p': 4, '720p': 3, '480p': 2, '360p': 1 };
+        variants.sort(function (a, b) {
+          return (rank[b.quality] || 0) - (rank[a.quality] || 0);
+        });
+        return variants;
+      }
+
       return [{
-        url: m3u8[0],
+        url: masterUrl,
         quality: '720p',
         container: 'hls',
         headers: { 'User-Agent': UA, 'Referer': embedUrl },
@@ -467,30 +426,36 @@ function _extractFileLions(embedUrl, ref) {
         audioLang: 'ko',
         label: 'FileLions (720p)'
       }];
-    }
-    return [];
+    }).catch(function () {
+      return [{
+        url: masterUrl,
+        quality: '720p',
+        container: 'hls',
+        headers: { 'User-Agent': UA, 'Referer': embedUrl },
+        kind: 'sub',
+        audioLang: 'ko',
+        label: 'FileLions (720p)'
+      }];
+    });
   }).catch(function () { return []; });
 }
 
 function _extractFromEmbed(embedUrl, ref) {
   if (!embedUrl) return Promise.resolve([]);
 
-  // Skip Hydrax / Abyssplayer because it uses obfuscated WASM and triggers Cloudflare hang
-  if (/abyssplayer|hydrax/i.test(embedUrl)) {
+  // Skip Hydrax / Abyssplayer and TurboVIP:
+  // - Abyssplayer uses obfuscated WASM and triggers Cloudflare hang
+  // - TurboVIP uses fake PNG headers (\x89PNG) on Google User Content which causes libmpv/ffmpeg to hang or fail
+  if (/abyssplayer|hydrax|turbovid|turbosplayer/i.test(embedUrl)) {
     return Promise.resolve([]);
   }
 
-  // 1. TurboVIP (emturbovid.com / turbovidhls.com / turboviplay.com)
-  if (/turbovid/i.test(embedUrl)) {
-    return _extractTurboVIP(embedUrl, ref);
-  }
-
-  // 2. FileLions / Minochinos
-  if (/filelions|minochinos|vidhide/i.test(embedUrl)) {
+  // 1. FileLions / Minochinos / Vidhide / Callistanise
+  if (/filelions|minochinos|vidhide|callistanise/i.test(embedUrl)) {
     return _extractFileLions(embedUrl, ref);
   }
 
-  // 3. Direct m3u8 or mp4 in embed HTML
+  // 2. Direct m3u8 or mp4 in embed HTML
   return _get(embedUrl, ref || SITE + '/', 4000).then(function (html) {
     var out = [];
     var m3u8 = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
@@ -542,13 +507,13 @@ function getVideoSources(episodeUrl) {
     var mirrors = [];
     var seenEmbeds = {};
 
-    // 1. Check direct iframe on page
+    // 1. Check direct iframe on page (skip unplayable hosts)
     var pageIframes = html.match(/<iframe[^>]+src=["']([^"']+)["']/gi) || [];
     for (var f = 0; f < pageIframes.length; f++) {
       var fsrc = (pageIframes[f].match(/src=["']([^"']+)["']/i) || [])[1];
-      if (fsrc && !seenEmbeds[fsrc] && !/abyssplayer|hydrax/i.test(fsrc)) {
+      if (fsrc && !seenEmbeds[fsrc] && !/abyssplayer|hydrax|turbovid|turbosplayer/i.test(fsrc)) {
         seenEmbeds[fsrc] = 1;
-        var fname = /turbovid/i.test(fsrc) ? 'TurboVIP' : (/filelions|minochinos|vidhide/i.test(fsrc) ? 'FileLions' : 'Player');
+        var fname = /filelions|minochinos|vidhide|callistanise/i.test(fsrc) ? 'FileLions' : 'Player';
         mirrors.push({ name: fname, embedUrl: fsrc });
       }
     }
@@ -566,7 +531,7 @@ function getVideoSources(episodeUrl) {
         var srcMatch = decoded.match(/src=["']([^"']+)["']/i);
         if (srcMatch && srcMatch[1]) {
           var eUrl = srcMatch[1];
-          if (!seenEmbeds[eUrl] && !/abyssplayer|hydrax/i.test(eUrl)) {
+          if (!seenEmbeds[eUrl] && !/abyssplayer|hydrax|turbovid|turbosplayer/i.test(eUrl)) {
             seenEmbeds[eUrl] = 1;
             mirrors.push({ name: name, embedUrl: eUrl });
           }
@@ -575,7 +540,7 @@ function getVideoSources(episodeUrl) {
     }
 
     // Also look for fallback links in download box (<div class="dlbox"> or <div class="soradl">)
-    var dlEmbeds = html.match(/href=["']https?:\/\/(?:minochinos\.com|vidhidepro\.com|filelions\.[a-z]+)\/(?:v|d)\/([a-zA-Z0-9]+)["']/gi) || [];
+    var dlEmbeds = html.match(/href=["']https?:\/\/(?:minochinos\.com|vidhidepro\.com|callistanise\.com|filelions\.[a-z]+)\/(?:v|d)\/([a-zA-Z0-9]+)["']/gi) || [];
     for (var d = 0; d < dlEmbeds.length; d++) {
       var dm = dlEmbeds[d].match(/href=["']https?:\/\/[^"']+\/(?:v|d)\/([a-zA-Z0-9]+)["']/i);
       if (dm) {

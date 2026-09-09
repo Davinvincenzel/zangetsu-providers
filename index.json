@@ -122,7 +122,7 @@
     {
       "id": "oppadrama",
       "name": "Oppadrama",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "type": "movie",
       "lang": "id",
       "file": "providers/oppadrama.js",
