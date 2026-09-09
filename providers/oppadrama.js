@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.3'
+    version: '1.0.4'
   };
 }
 
@@ -69,10 +69,13 @@ function _unpack(p, a, c, k) {
 function _get(url, ref, timeoutMs) {
   var h = {
     'User-Agent': UA,
-    'Cookie': COOKIE,
     'Referer': ref || SITE + '/'
   };
-  return fetch(url, { headers: h, timeoutMs: timeoutMs || 8000 })
+  if (url.indexOf('45.11.57.188') > -1) {
+    h['Cookie'] = COOKIE;
+  }
+  var ms = timeoutMs || 5000;
+  var fetchPromise = fetch(url, { headers: h })
     .then(function (r) {
       if (!r) return '';
       if (typeof r === 'string') return r;
@@ -81,6 +84,19 @@ function _get(url, ref, timeoutMs) {
       return '';
     })
     .catch(function () { return ''; });
+
+  return new Promise(function (resolve) {
+    var timer = setTimeout(function () {
+      resolve('');
+    }, ms);
+    fetchPromise.then(function (res) {
+      clearTimeout(timer);
+      resolve(res);
+    }, function () {
+      clearTimeout(timer);
+      resolve('');
+    });
+  });
 }
 
 // Quality scoring for sorting: 1080p > 720p > 480p > 360p > Auto > default
@@ -493,6 +509,11 @@ function _extractFileLions(embedUrl, ref) {
 function _extractFromEmbed(embedUrl, ref) {
   if (!embedUrl) return Promise.resolve([]);
 
+  // Skip Hydrax / Abyssplayer because it uses obfuscated WASM and triggers Cloudflare hang
+  if (/abyssplayer|hydrax/i.test(embedUrl)) {
+    return Promise.resolve([]);
+  }
+
   // 1. TurboVIP (emturbovid.com / turbovidhls.com / turboviplay.com)
   if (/turbovid/i.test(embedUrl)) {
     return _extractTurboVIP(embedUrl, ref);
@@ -504,7 +525,7 @@ function _extractFromEmbed(embedUrl, ref) {
   }
 
   // 3. Direct m3u8 or mp4 in embed HTML
-  return _get(embedUrl, ref || SITE + '/', 6000).then(function (html) {
+  return _get(embedUrl, ref || SITE + '/', 4000).then(function (html) {
     var out = [];
     var m3u8 = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
     if (m3u8) {
@@ -539,7 +560,7 @@ function _extractFromEmbed(embedUrl, ref) {
 function getVideoSources(episodeUrl) {
   var aurl = String(episodeUrl || '').trim();
 
-  return _get(aurl, SITE + '/', 8000).then(function (html) {
+  return _get(aurl, SITE + '/', 5000).then(function (html) {
     if (!html) return Promise.reject(new Error('Oppadrama: episode page not found'));
 
     // If a series overview page was passed instead of an episode page, resolve first episode
@@ -553,6 +574,7 @@ function getVideoSources(episodeUrl) {
 
     var mirrorSelect = html.match(/<select[^>]*class=["']mirror["'][\s\S]*?<\/select>/i);
     var mirrors = [];
+    var seenEmbeds = {};
 
     if (mirrorSelect) {
       var options = mirrorSelect[0].match(/<option[\s\S]*?<\/option>/gi) || [];
@@ -566,7 +588,11 @@ function getVideoSources(episodeUrl) {
         var decoded = _b64Decode(val);
         var srcMatch = decoded.match(/src=["']([^"']+)["']/i);
         if (srcMatch && srcMatch[1]) {
-          mirrors.push({ name: name, embedUrl: srcMatch[1] });
+          var eUrl = srcMatch[1];
+          if (!seenEmbeds[eUrl] && !/abyssplayer|hydrax/i.test(eUrl)) {
+            seenEmbeds[eUrl] = 1;
+            mirrors.push({ name: name, embedUrl: eUrl });
+          }
         }
       }
     }
@@ -576,7 +602,11 @@ function getVideoSources(episodeUrl) {
     for (var d = 0; d < dlEmbeds.length; d++) {
       var dm = dlEmbeds[d].match(/href=["']https?:\/\/[^"']+\/(?:v|d)\/([a-zA-Z0-9]+)["']/i);
       if (dm) {
-        mirrors.push({ name: 'FileLions', embedUrl: 'https://minochinos.com/v/' + dm[1] });
+        var dlUrl = 'https://minochinos.com/v/' + dm[1];
+        if (!seenEmbeds[dlUrl]) {
+          seenEmbeds[dlUrl] = 1;
+          mirrors.push({ name: 'FileLions', embedUrl: dlUrl });
+        }
       }
     }
 
@@ -586,14 +616,13 @@ function getVideoSources(episodeUrl) {
         var prio = function (n) {
           if (/turbo/i.test(n)) return 10;
           if (/filelions|minochinos|vidhide/i.test(n)) return 8;
-          if (/hydrax/i.test(n)) return 4;
           return 1;
         };
         return prio(b.name) - prio(a.name);
       });
 
       var tasks = mirrors.map(function (m) {
-        return _extractFromEmbed(m.embedUrl, aurl);
+        return _extractFromEmbed(m.embedUrl, aurl).catch(function () { return []; });
       });
 
       return Promise.all(tasks).then(function (nested) {
