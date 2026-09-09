@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.1'
+    version: '1.0.2'
   };
 }
 
