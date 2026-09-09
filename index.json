@@ -127,6 +127,15 @@
       "lang": "id",
       "file": "providers/oppadrama.js",
       "nsfw": false
+    },
+    {
+      "id": "vidking",
+      "name": "Vidking",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "en",
+      "file": "providers/vidking.js",
+      "nsfw": false
     }
   ]
 }

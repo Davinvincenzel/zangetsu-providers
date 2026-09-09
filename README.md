@@ -32,6 +32,7 @@ One manifest = many sources. This default repo is added on first launch, so user
 | BollyFlix | Movie / Series | Bollywood and Hollywood, dual-audio releases. |
 | MoviesDrive | Movie / Series | Movies and series, WEB-DL releases. |
 | MultiMovies | Movie / Series | Streaming (HLS) for movies and series; series availability varies by title. |
+| Vidking | Movie / Series | Fast direct HLS streams (2160p, 1080p, 720p, 480p) via TMDB catalog. |
 
 Availability depends on each site staying up; sources are updated as sites change.
 
