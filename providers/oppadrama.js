@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.5'
+    version: '1.0.6'
   };
 }
 
@@ -44,17 +44,29 @@ function _b64Decode(b64) {
     if (typeof atob === 'function') return atob(b64);
     if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64').toString('utf8');
   } catch (e) {}
-  var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-  var str = String(b64).replace(/[=]+$/, '');
-  var out = '';
-  for (var bc = 0, bs = 0, buffer = 0, idx = 0; idx < str.length; idx++) {
-    buffer = (buffer << 6) | chars.indexOf(str.charAt(idx));
-    if (++bc % 4) {
-      bs = (buffer << (8 - (bc % 4) * 2)) & 0xff;
-      out += String.fromCharCode(bs);
+  var b64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  var str = String(b64 || '').replace(/[^A-Za-z0-9\+\/\=]/g, '');
+  var output = '';
+  var i = 0;
+  while (i < str.length) {
+    var enc1 = b64Chars.indexOf(str.charAt(i++));
+    var enc2 = b64Chars.indexOf(str.charAt(i++));
+    var enc3 = b64Chars.indexOf(str.charAt(i++));
+    var enc4 = b64Chars.indexOf(str.charAt(i++));
+
+    var chr1 = (enc1 << 2) | (enc2 >> 4);
+    var chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+    var chr3 = ((enc3 & 3) << 6) | enc4;
+
+    output += String.fromCharCode(chr1);
+    if (enc3 !== 64 && enc3 !== -1) {
+      output += String.fromCharCode(chr2);
+    }
+    if (enc4 !== 64 && enc4 !== -1) {
+      output += String.fromCharCode(chr3);
     }
   }
-  return out;
+  return output;
 }
 
 function _unpack(p, a, c, k) {
@@ -376,42 +388,14 @@ function _parseMasterM3u8(masterUrl, content, ref) {
 }
 
 function _extractTurboVIP(embedUrl, ref) {
-  var idMatch = embedUrl.match(/\/t\/([a-zA-Z0-9]+)/i);
+  var idMatch = embedUrl.match(/\/(?:t|embed|e)\/([a-zA-Z0-9_-]+)/i);
   var directM3u8 = idMatch ? ('https://cdn1.turboviplay.com/data3/' + idMatch[1] + '/' + idMatch[1] + '.m3u8') : null;
 
-  var fetchUrl = embedUrl.replace(/emturbovid\.com/i, 'turbovidhls.com');
-
-  return _get(fetchUrl, ref || SITE + '/', 6000).then(function (html) {
-    var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
-    var masterUrl = m3u8Match ? m3u8Match[0] : directM3u8;
-    if (!masterUrl) return [];
-
-    return _get(masterUrl, 'https://turbovidhls.com/', 5000).then(function (playlist) {
+  if (directM3u8) {
+    return _get(directM3u8, 'https://turbovidhls.com/', 4000).then(function (playlist) {
       if (playlist && playlist.indexOf('#EXT-X-STREAM-INF:') > -1) {
-        return _parseMasterM3u8(masterUrl, playlist, 'https://turbovidhls.com/');
+        return _parseMasterM3u8(directM3u8, playlist, 'https://turbovidhls.com/');
       }
-      return [{
-        url: masterUrl,
-        quality: '1080p',
-        container: 'hls',
-        headers: { 'User-Agent': UA, 'Referer': 'https://turbovidhls.com/' },
-        kind: 'sub',
-        audioLang: 'ko',
-        label: 'TurboVIP (1080p)'
-      }];
-    }).catch(function () {
-      return [{
-        url: masterUrl,
-        quality: '1080p',
-        container: 'hls',
-        headers: { 'User-Agent': UA, 'Referer': 'https://turbovidhls.com/' },
-        kind: 'sub',
-        audioLang: 'ko',
-        label: 'TurboVIP (1080p)'
-      }];
-    });
-  }).catch(function () {
-    if (directM3u8) {
       return [{
         url: directM3u8,
         quality: '1080p',
@@ -421,9 +405,41 @@ function _extractTurboVIP(embedUrl, ref) {
         audioLang: 'ko',
         label: 'TurboVIP (1080p)'
       }];
+    }).catch(function () {
+      var fetchUrl = embedUrl.replace(/emturbovid\.com/i, 'turbovidhls.com');
+      return _get(fetchUrl, ref || SITE + '/', 4000).then(function (html) {
+        var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
+        if (m3u8Match) {
+          return [{
+            url: m3u8Match[0],
+            quality: '1080p',
+            container: 'hls',
+            headers: { 'User-Agent': UA, 'Referer': 'https://turbovidhls.com/' },
+            kind: 'sub',
+            audioLang: 'ko',
+            label: 'TurboVIP (1080p)'
+          }];
+        }
+        return [];
+      }).catch(function () { return []; });
+    });
+  }
+
+  return _get(embedUrl, ref || SITE + '/', 4000).then(function (html) {
+    var m3u8Match = html.match(/https?:\/\/[^"'\s`\\]+\.m3u8[^"'\s`\\]*/i);
+    if (m3u8Match) {
+      return [{
+        url: m3u8Match[0],
+        quality: '720p',
+        container: 'hls',
+        headers: { 'User-Agent': UA, 'Referer': embedUrl },
+        kind: 'sub',
+        audioLang: 'ko',
+        label: 'TurboVIP (720p)'
+      }];
     }
     return [];
-  });
+  }).catch(function () { return []; });
 }
 
 function _extractFileLions(embedUrl, ref) {
@@ -526,6 +542,17 @@ function getVideoSources(episodeUrl) {
     var mirrors = [];
     var seenEmbeds = {};
 
+    // 1. Check direct iframe on page
+    var pageIframes = html.match(/<iframe[^>]+src=["']([^"']+)["']/gi) || [];
+    for (var f = 0; f < pageIframes.length; f++) {
+      var fsrc = (pageIframes[f].match(/src=["']([^"']+)["']/i) || [])[1];
+      if (fsrc && !seenEmbeds[fsrc] && !/abyssplayer|hydrax/i.test(fsrc)) {
+        seenEmbeds[fsrc] = 1;
+        var fname = /turbovid/i.test(fsrc) ? 'TurboVIP' : (/filelions|minochinos|vidhide/i.test(fsrc) ? 'FileLions' : 'Player');
+        mirrors.push({ name: fname, embedUrl: fsrc });
+      }
+    }
+
     if (mirrorSelect) {
       var options = mirrorSelect[0].match(/<option[\s\S]*?<\/option>/gi) || [];
 
@@ -565,7 +592,7 @@ function getVideoSources(episodeUrl) {
       mirrors.sort(function (a, b) {
         var prio = function (n) {
           if (/turbo/i.test(n)) return 10;
-          if (/filelions|minochinos|vidhide/i.test(n)) return 8;
+          if (/filelions|minochinos|vidhide/i.test(n)) return 5;
           return 1;
         };
         return prio(b.name) - prio(a.name);
@@ -587,7 +614,16 @@ function getVideoSources(episodeUrl) {
             }
           }
         }
-        flat.sort(function (a, b) { return _qualityScore(b.quality) - _qualityScore(a.quality); });
+        flat.sort(function (a, b) {
+          var sPrio = function (s) {
+            if (/turbo/i.test(s.label || '')) return 10;
+            if (/filelions/i.test(s.label || '')) return 5;
+            return 1;
+          };
+          var pDiff = sPrio(b) - sPrio(a);
+          if (pDiff !== 0) return pDiff;
+          return _qualityScore(b.quality) - _qualityScore(a.quality);
+        });
         return flat;
       });
     }
