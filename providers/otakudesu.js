@@ -8,10 +8,10 @@ var UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
   + '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // Servers that cannot be extracted (download-only, dead, or require captcha)
-// Based on historical quarterly scrape from 2017 to 2026
-var SKIP_SERVERS = /\b(mega|filedon|kraken|krakenfiles|nekoclouds|moedesu|moedesuhd|moeplay|zippyshare|acefile|racaty|gdrive2?|solidfiles|filesim|hxfile|shareweb)\b/i;
+// Note: moedesu/moedesuhd are NOT skipped as they serve direct googlevideo mp4 streams
+var SKIP_SERVERS = /\b(mega|filedon|kraken|krakenfiles|nekoclouds|zippyshare|acefile|racaty|gdrive2?|solidfiles|filesim|hxfile|shareweb)\b/i;
 // Embed domains that we cannot extract direct streams from
-var SKIP_EMBEDS = /blogger\.com|filedon\.co|mega\.nz|krakenfiles\.com|nekoclouds\.com|moedesu|solidfiles\.com/i;
+var SKIP_EMBEDS = /blogger\.com|filedon\.co|mega\.nz|krakenfiles\.com|nekoclouds\.com|solidfiles\.com/i;
 
 function getInfo() {
   return {
@@ -20,7 +20,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/wp-content/uploads/2017/06/Logo-1.png',
     type: 'anime',
-    version: '2.0.0'
+    version: '2.0.1'
   };
 }
 
@@ -385,6 +385,7 @@ function _resolveAllMirrors(epHtml, episodeUrl) {
           if (/vidhide/i.test(n)) return 10;          // 229x, HLS, most reliable
           if (/odstream|odstreamhd/i.test(n)) return 9; // 149x combined, desustream
           if (/ondesu/i.test(n)) return 8;             // 75x combined (ondesu/hd/2hd/3)
+          if (/moedesu/i.test(n)) return 7.5;          // moedesu & moedesuhd (googlevideo, reliable 720p/480p)
           if (/desudrive/i.test(n)) return 7;          // 43x, wraps yourupload
           if (/mp4load|mp4upload/i.test(n)) return 6;  // 41x
           if (/yourupload/i.test(n)) return 5;         // 44x
