@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.0'
+    version: '1.0.1'
   };
 }
 
@@ -201,6 +201,83 @@ function getHome(opts) {
 }
 
 // ── Detail & Episodes ────────────────────────────────────────────────────────
+function _extractEpisodes(html, currentUrl) {
+  var episodes = [];
+
+  // Case 1: <div class="eplister"> (Series overview / some movies)
+  var idx = html.indexOf('class="eplister"');
+  if (idx > -1) {
+    var ulMatch = html.slice(idx).match(/<ul[^>]*>([\s\S]*?)<\/ul>/i);
+    if (ulMatch) {
+      var lis = ulMatch[1].match(/<li[\s\S]*?<\/li>/gi) || [];
+      for (var i = 0; i < lis.length; i++) {
+        var li = lis[i];
+        var href = (li.match(/href=["']([^"']+)["']/i) || [])[1];
+        if (!href) continue;
+        var epTitle = (li.match(/class=["']epl-title["']>([^<]+)<\/div>/i) || [])[1] || '';
+        var numStr = (li.match(/class=["']epl-num["']>([^<]+)<\/div>/i) || [])[1] || '';
+        var numMatch = numStr.match(/^(\d+)$/) || epTitle.match(/Episode\s+(\d+)/i);
+        var epNum = numMatch ? parseInt(numMatch[1], 10) : (i + 1);
+
+        episodes.push({
+          id: href,
+          title: _cleanTitle(epTitle || ('Episode ' + epNum)),
+          number: epNum,
+          url: href,
+          season: 1
+        });
+      }
+    }
+  }
+
+  // Case 2: <div class="episodelist"> (Episode watch pages)
+  if (!episodes.length) {
+    var epIdx = html.indexOf('class="episodelist"');
+    if (epIdx > -1) {
+      var epUl = html.slice(epIdx).match(/<ul[^>]*>([\s\S]*?)<\/ul>/i);
+      if (epUl) {
+        var epLis = epUl[1].match(/<li[\s\S]*?<\/li>/gi) || [];
+        for (var j = 0; j < epLis.length; j++) {
+          var eli = epLis[j];
+          var ehref = (eli.match(/href=["']([^"']+)["']/i) || [])[1];
+          if (!ehref) continue;
+          var h4Match = (eli.match(/<h4>([^<]+)<\/h4>/i) || [])[1] || '';
+          var spanMatch = (eli.match(/<span>([^<]+)<\/span>/i) || [])[1] || '';
+          var numM = spanMatch.match(/Eps?\s*(\d+)/i) || h4Match.match(/Episode\s+(\d+)/i);
+          var numVal = numM ? parseInt(numM[1], 10) : (epLis.length - j);
+
+          episodes.push({
+            id: ehref,
+            title: _cleanTitle(h4Match || ('Episode ' + numVal)),
+            number: numVal,
+            url: ehref,
+            season: 1
+          });
+        }
+      }
+    }
+  }
+
+  // Case 3: Player exists directly on single post / movie
+  if (!episodes.length) {
+    var hasPlayer = /class=["']mirror["']/i.test(html) || /class=["']player-embed["']/i.test(html) || /<iframe/i.test(html);
+    if (hasPlayer) {
+      var singleTitle = _cleanTitle((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [])[1] || 'Watch');
+      episodes.push({
+        id: currentUrl,
+        title: singleTitle,
+        number: 1,
+        url: currentUrl,
+        season: 1
+      });
+    }
+  }
+
+  episodes.sort(function (a, b) { return a.number - b.number; });
+  return episodes;
+}
+
+// ── Detail & Episodes ────────────────────────────────────────────────────────
 function getDetail(url, opts) {
   var aurl = String(url || '').trim();
   if (aurl.indexOf('http') !== 0) {
@@ -209,6 +286,30 @@ function getDetail(url, opts) {
   if (!/\/$/.test(aurl)) aurl += '/';
 
   return _get(aurl, SITE + '/', 6000).then(function (html) {
+    if (!html) {
+      return {
+        id: aurl,
+        title: 'Unknown',
+        url: aurl,
+        cover: null,
+        description: '',
+        status: 'unknown',
+        genres: [],
+        studios: [],
+        type: 'movie',
+        sourceId: SOURCE_ID,
+        episodes: [],
+        subCount: 0,
+        dubCount: 0
+      };
+    }
+
+    // If this is an episode page linking to its parent series, resolve parent series for full detail
+    var parentMatch = html.match(/<h3><a href=["'](http:\/\/45\.11\.57\.188\/[^"']+)["']>([^<]+)<\/a><\/h3>/i);
+    if (parentMatch && parentMatch[1] && parentMatch[1] !== aurl && !/-episode-\d+/i.test(parentMatch[1])) {
+      return getDetail(parentMatch[1], opts);
+    }
+
     var title = _cleanTitle(
       (html.match(/<h1[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i) || [])[1]
       || (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [])[1]
@@ -233,74 +334,31 @@ function getDetail(url, opts) {
       genres.push(_cleanTitle(gLinks[i]));
     }
 
+    var episodes = _extractEpisodes(html, aurl);
+
     return {
       id: aurl,
-      title: title,
+      title: title || 'Untitled',
+      englishTitle: null,
       url: aurl,
       cover: poster,
       description: synopsis,
       status: status,
       genres: genres,
+      studios: [],
       type: 'movie',
-      sourceId: SOURCE_ID
+      sourceId: SOURCE_ID,
+      episodes: episodes,
+      subCount: episodes.length,
+      dubCount: 0
     };
   });
 }
 
 function getEpisodes(url, opts) {
-  var aurl = String(url || '').trim();
-  if (aurl.indexOf('http') !== 0) {
-    aurl = SITE + (aurl.indexOf('/') === 0 ? aurl : '/' + aurl);
-  }
-  if (!/\/$/.test(aurl)) aurl += '/';
-
-  return _get(aurl, SITE + '/', 6000).then(function (html) {
-    var episodes = [];
-
-    // Check if this page has an episode list (<div class="eplister">)
-    var idx = html.indexOf('class="eplister"');
-    if (idx > -1) {
-      var ulMatch = html.slice(idx).match(/<ul[^>]*>([\s\S]*?)<\/ul>/i);
-      if (ulMatch) {
-        var lis = ulMatch[1].match(/<li[\s\S]*?<\/li>/gi) || [];
-        for (var i = 0; i < lis.length; i++) {
-          var li = lis[i];
-          var href = (li.match(/href=["']([^"']+)["']/i) || [])[1];
-          if (!href) continue;
-          var epTitle = (li.match(/class=["']epl-title["']>([^<]+)<\/div>/i) || [])[1] || '';
-          var numStr = (li.match(/class=["']epl-num["']>([^<]+)<\/div>/i) || [])[1] || '';
-          var numMatch = numStr.match(/^(\d+)$/) || epTitle.match(/Episode\s+(\d+)/i) || numStr.match(/(\d+)/);
-          var epNum = numMatch ? parseInt(numMatch[1], 10) : (i + 1);
-
-          episodes.push({
-            id: href,
-            title: _cleanTitle(epTitle || ('Episode ' + epNum)),
-            number: epNum,
-            url: href,
-            season: 1
-          });
-        }
-        episodes.sort(function (a, b) { return a.number - b.number; });
-        return episodes;
-      }
-    }
-
-    // If it's a Movie or Single Episode post (has video player directly)
-    var hasPlayer = /class=["']mirror["']/i.test(html) || /<iframe/i.test(html) || /class=["']player-embed["']/i.test(html);
-    if (hasPlayer) {
-      var singleTitle = _cleanTitle((html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || [])[1] || 'Watch');
-      episodes.push({
-        id: aurl,
-        title: singleTitle,
-        number: 1,
-        url: aurl,
-        season: 1
-      });
-      return episodes;
-    }
-
-    return episodes;
-  }).catch(function () { return []; });
+  return getDetail(url, opts).then(function (d) {
+    return (d && d.episodes) ? d.episodes : [];
+  });
 }
 
 // ── Stream Extraction ────────────────────────────────────────────────────────
