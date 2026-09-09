@@ -3,6 +3,12 @@
 const SITE = 'https://otakudesu.blog';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
+// Servers that cannot be extracted (download-only, dead, or require captcha)
+// Based on scrape of 176 episodes across 80 anime (2026-09-09)
+const SKIP_SERVERS = /\b(mega|filedon|kraken|krakenfiles|nekoclouds|moedesu|moedesuhd|moeplay|zippyshare|acefile|racaty|gdrive2?|solidfiles|filesim|hxfile|shareweb)\b/i;
+// Embed domains that we cannot extract direct streams from
+const SKIP_EMBEDS = /blogger\.com|filedon\.co|mega\.nz|krakenfiles\.com|nekoclouds\.com|moedesu|solidfiles\.com/i;
+
 function _cleanTitle(t) {
   return String(t || '')
     .replace(/\s*(Subtitle Indonesia|Sub Indo)\s*/gi, ' ')
@@ -25,8 +31,8 @@ function _b64Decode(b64) {
 
 function _unpack(code) {
   try {
-    const match = code.match(/eval\s*\(\s*function\s*\([^\)]*\)\s*\{[\s\S]*?\}\s*\(\s*['"]([\s\S]*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([\s\S]*?)['"]\s*\.split\(/i)
-      || code.match(/}\s*\(\s*['"]([\s\S]*?)['"]\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([\s\S]*?)['"]\s*\.split\(/i);
+    const match = code.match(/eval\s*\(\s*function\s*\([^\)]*\)\s*\{[\s\S]*?\}\s*\(\s*['"]([^]*?)['"](?:\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([^]*?)['"]\s*\.split\()/i)
+      || code.match(/}\s*\(\s*['"]([^]*?)['"](?:\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*['"]([^]*?)['"]\s*\.split\()/i);
     if (!match) return '';
     const payload = match[1];
     const radix = parseInt(match[2], 10);
@@ -94,9 +100,7 @@ async function _post(url, data, ref) {
 
 async function _extractFromEmbed(embedUrl, ref, depth = 0) {
   if (!embedUrl) return [];
-  if (/blogger\.com|filedon\.co|mega\.nz|krakenfiles\.com|nekoclouds\.com|moedesu/i.test(embedUrl)) {
-    return [];
-  }
+  if (SKIP_EMBEDS.test(embedUrl)) return [];
   try {
     const html = await _get(embedUrl, ref || SITE + '/');
     if (!html) return [];
@@ -120,7 +124,7 @@ async function _extractFromEmbed(embedUrl, ref, depth = 0) {
       out.push({
         url: sUrl,
         type: isHls ? 'm3u8' : 'mp4',
-        quality: q || '720p',
+        quality: q || 'default',
         subtitles: []
       });
     };
@@ -157,7 +161,7 @@ async function _extractFromEmbed(embedUrl, ref, depth = 0) {
     // 3. Nested iframe (e.g. desudrive wrapping yourupload)
     if (depth < 2) {
       const nestedIfr = (html.match(/<iframe[^>]+src=["']([^"']+)["']/i) || [])[1];
-      if (nestedIfr && nestedIfr !== embedUrl && !/blogger\.com|mega\.nz|moedesu/i.test(nestedIfr)) {
+      if (nestedIfr && nestedIfr !== embedUrl && !SKIP_EMBEDS.test(nestedIfr)) {
         return await _extractFromEmbed(nestedIfr, embedUrl, depth + 1);
       }
     }
@@ -168,7 +172,18 @@ async function _extractFromEmbed(embedUrl, ref, depth = 0) {
   }
 }
 
-async function _resolveFallbackMirrors(epHtml, episodeUrl) {
+// Quality sort priority: higher resolution first
+function _qualityScore(q) {
+  if (!q) return 0;
+  const n = parseInt(q, 10);
+  if (n >= 1080) return 4;
+  if (n >= 720) return 3;
+  if (n >= 480) return 2;
+  if (n >= 360) return 1;
+  return 0;
+}
+
+async function _resolveAllMirrors(epHtml, episodeUrl) {
   const nonceActions = epHtml.match(/action:\s*"([a-f0-9]{32})"/g) || [];
   if (nonceActions.length < 2) return [];
 
@@ -180,7 +195,8 @@ async function _resolveFallbackMirrors(epHtml, episodeUrl) {
     const nonce = nonceRes && nonceRes.data;
     if (!nonce) return [];
 
-    const mirrorLinks = epHtml.match(/<a[^>]+data-content="([^"]+)"[^>]*>([^<]+)<\/a>/g) || [];
+    // Parse ALL mirror links from the episode page
+    const mirrorLinks = epHtml.match(/<a[^>]+data-content="([^"]+)"[^>]*>[^<]+<\/a>/g) || [];
     const candidates = [];
 
     for (let m = 0; m < mirrorLinks.length; m++) {
@@ -193,31 +209,49 @@ async function _resolveFallbackMirrors(epHtml, episodeUrl) {
       if (!parsed) continue;
 
       const name = ((linkTag.match(/>([^<]+)<\/a>/) || [])[1] || '').trim().toLowerCase();
-      if (name.indexOf('moedesu') > -1) continue;
+
+      // Skip servers that cannot be extracted
+      if (SKIP_SERVERS.test(name)) continue;
+      // Skip blogger (blogs) — cannot extract direct stream from blogger embeds
+      if (/^blogs?$/i.test(name)) continue;
 
       const q = parsed.q || '';
-      const is720 = q.indexOf('720') > -1 || q.indexOf('1080') > -1;
-      const is480 = q.indexOf('480') > -1;
-      const score = (is720 ? 100 : (is480 ? 50 : 10)) + (name.indexOf('vidhide') > -1 ? 30 : 0);
-      candidates.push({ parsed, name, score, q });
+      candidates.push({ parsed, name, q, qScore: _qualityScore(q) });
     }
 
-    candidates.sort((a, b) => b.score - a.score);
+    // Sort by quality (highest first), then by server preference
+    candidates.sort((a, b) => {
+      if (b.qScore !== a.qScore) return b.qScore - a.qScore;
+      // Prefer servers known to work well (based on scrape data)
+      const serverPrio = (n) => {
+        if (/vidhide/i.test(n)) return 10;          // 229x, HLS, most reliable
+        if (/odstream|odstreamhd/i.test(n)) return 9; // 149x combined, desustream
+        if (/ondesu/i.test(n)) return 8;             // 75x combined (ondesu/hd/2hd/3)
+        if (/desudrive/i.test(n)) return 7;          // 43x, wraps yourupload
+        if (/mp4load|mp4upload/i.test(n)) return 6;  // 41x
+        if (/yourupload/i.test(n)) return 5;         // 44x
+        if (/odcdn/i.test(n)) return 4;              // 26x
+        if (/otakuplay|otakustream/i.test(n)) return 3; // 23x combined
+        // All custom desustream embeds (desudesu, playdesu, otakuwatch, etc.)
+        if (/desu|otakuwatch|updesu|odesu|playdesu/i.test(n)) return 2;
+        if (/solidfiles|pdrain|filelions/i.test(n)) return 1;
+        return 0; // unknown servers still get tried
+      };
+      return serverPrio(b.name) - serverPrio(a.name);
+    });
 
+    // Deduplicate: keep best server per quality, but allow multiple qualities
     const selected = [];
-    const seenQualities = {};
+    const seenKeys = {};
     for (let i = 0; i < candidates.length; i++) {
       const c = candidates[i];
-      const provider = c.name.indexOf('vidhide') > -1 ? 'vidhide'
-        : (c.name.indexOf('yourupload') > -1 ? 'yu' : 'ondesu');
-      const key = c.q + '_' + provider;
-      if (!seenQualities[key]) {
-        seenQualities[key] = 1;
-        selected.push(c);
-        if (selected.length >= 3) break;
-      }
+      const key = c.q + '_' + c.name;
+      if (seenKeys[key]) continue;
+      seenKeys[key] = 1;
+      selected.push(c);
     }
 
+    // Resolve all selected mirrors in parallel
     const tasks = selected.map(async (c) => {
       const payload = { id: c.parsed.id, i: c.parsed.i, q: c.parsed.q, nonce: nonce, action: streamAction };
       try {
@@ -238,9 +272,19 @@ async function _resolveFallbackMirrors(epHtml, episodeUrl) {
 
     const nested = await Promise.all(tasks);
     const flat = [];
+    const seenUrls = {};
     for (let i = 0; i < nested.length; i++) {
-      for (let j = 0; j < nested[i].length; j++) flat.push(nested[i][j]);
+      for (let j = 0; j < nested[i].length; j++) {
+        const src = nested[i][j];
+        if (!seenUrls[src.url]) {
+          seenUrls[src.url] = 1;
+          flat.push(src);
+        }
+      }
     }
+
+    // Sort final results: highest quality first
+    flat.sort((a, b) => _qualityScore(b.quality) - _qualityScore(a.quality));
     return flat;
   } catch (e) {
     return [];
@@ -326,15 +370,8 @@ class Provider {
     const epHtml = await _get(epUrl, SITE + '/');
     if (!epHtml) throw new Error('Otakudesu: episode page not found');
 
-    const mainIfr = (epHtml.match(/<iframe[^>]+src="([^"]+)"/i) || [])[1];
-    let sources = [];
-
-    if (mainIfr && /desustream|odvidhide|vidhide|mp4upload/i.test(mainIfr)) {
-      sources = await _extractFromEmbed(mainIfr, epUrl);
-    }
-    if (!sources || sources.length === 0) {
-      sources = await _resolveFallbackMirrors(epHtml, epUrl);
-    }
+    // Always resolve ALL mirrors from all quality tabs
+    const sources = await _resolveAllMirrors(epHtml, epUrl);
 
     if (!sources || sources.length === 0) {
       throw new Error('Otakudesu: no playable stream found');
