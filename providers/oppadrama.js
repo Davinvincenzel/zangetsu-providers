@@ -15,7 +15,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: 'http://i3.wp.com/45.11.57.188/wp-content/uploads/2021/05/Oppadrama.png',
     type: 'movie',
-    version: '1.0.4'
+    version: '1.0.5'
   };
 }
 
@@ -69,13 +69,10 @@ function _unpack(p, a, c, k) {
 function _get(url, ref, timeoutMs) {
   var h = {
     'User-Agent': UA,
+    'Cookie': COOKIE,
     'Referer': ref || SITE + '/'
   };
-  if (url.indexOf('45.11.57.188') > -1) {
-    h['Cookie'] = COOKIE;
-  }
-  var ms = timeoutMs || 5000;
-  var fetchPromise = fetch(url, { headers: h })
+  return fetch(url, { headers: h, timeoutMs: timeoutMs || 8000 })
     .then(function (r) {
       if (!r) return '';
       if (typeof r === 'string') return r;
@@ -84,19 +81,6 @@ function _get(url, ref, timeoutMs) {
       return '';
     })
     .catch(function () { return ''; });
-
-  return new Promise(function (resolve) {
-    var timer = setTimeout(function () {
-      resolve('');
-    }, ms);
-    fetchPromise.then(function (res) {
-      clearTimeout(timer);
-      resolve(res);
-    }, function () {
-      clearTimeout(timer);
-      resolve('');
-    });
-  });
 }
 
 // Quality scoring for sorting: 1080p > 720p > 480p > 360p > Auto > default
@@ -111,6 +95,39 @@ function _qualityScore(q) {
   return 0;
 }
 
+function _parseArticles(htmlBlock) {
+  var out = [];
+  var seen = {};
+  var articles = htmlBlock.match(/<article[^>]*>[\s\S]*?<\/article>/gi) || [];
+
+  for (var i = 0; i < articles.length; i++) {
+    var item = articles[i];
+    var linkMatch = item.match(/href=["']([^"']+)["']/i);
+    if (!linkMatch) continue;
+    var itemUrl = linkMatch[1];
+    if (seen[itemUrl]) continue;
+    seen[itemUrl] = 1;
+
+    var titleMatch = item.match(/<h2[^>]*itemprop=["']headline["'][^>]*>([\s\S]*?)<\/h2>/i)
+      || item.match(/title=["']([^"']+)["']/i);
+    var title = _cleanTitle(titleMatch ? titleMatch[1] : '');
+    if (!title) continue;
+
+    var imgMatch = item.match(/src=["']([^"']+)["']/i);
+    var cover = imgMatch ? imgMatch[1] : null;
+
+    out.push({
+      id: itemUrl,
+      title: title,
+      url: itemUrl,
+      cover: cover,
+      type: 'movie',
+      sourceId: SOURCE_ID
+    });
+  }
+  return out;
+}
+
 // ── Search ───────────────────────────────────────────────────────────────────
 function search(query, page, opts) {
   var q = String(query || '').trim();
@@ -122,98 +139,31 @@ function search(query, page, opts) {
   }
 
   return _get(url, SITE + '/', 6000).then(function (html) {
-    var out = [];
-    var seen = {};
-    var articles = html.match(/<article[^>]*>[\s\S]*?<\/article>/gi) || [];
-
-    for (var i = 0; i < articles.length; i++) {
-      var item = articles[i];
-      var linkMatch = item.match(/href=["']([^"']+)["']/i);
-      if (!linkMatch) continue;
-      var itemUrl = linkMatch[1];
-      if (seen[itemUrl]) continue;
-      seen[itemUrl] = 1;
-
-      var titleMatch = item.match(/<h2[^>]*itemprop=["']headline["'][^>]*>([\s\S]*?)<\/h2>/i)
-        || item.match(/title=["']([^"']+)["']/i);
-      var title = _cleanTitle(titleMatch ? titleMatch[1] : '');
-      if (!title) continue;
-
-      var imgMatch = item.match(/src=["']([^"']+)["']/i);
-      var cover = imgMatch ? imgMatch[1] : null;
-
-      var typeMatch = item.match(/class=["']typez\s+([^"']+)["']/i);
-      var mediaType = 'movie';
-      if (typeMatch && /series|drama|tv/i.test(typeMatch[1])) {
-        mediaType = 'movie';
-      }
-
-      out.push({
-        id: itemUrl,
-        title: title,
-        url: itemUrl,
-        cover: cover,
-        type: mediaType,
-        sourceId: SOURCE_ID
-      });
-    }
-    return out;
+    return _parseArticles(html);
   }).catch(function () { return []; });
 }
 
 // ── Home ─────────────────────────────────────────────────────────────────────
 function getHome(opts) {
-  var sections = [
-    { title: 'Update Terbaru', url: SITE + '/' },
-    { title: 'Drama Ongoing', url: SITE + '/series/?status=ongoing&type=&order=update' },
-    { title: 'Drama Completed', url: SITE + '/series/?status=completed&type=&order=update' },
-    { title: 'Movie Terbaru', url: SITE + '/series/?status=&type=movie&order=update' }
-  ];
+  return _get(SITE + '/', SITE + '/', 6000).then(function (html) {
+    if (!html) return [];
+    var bixboxes = html.split(/<div class=["']bixbox["'][^>]*>/i);
+    var out = [];
 
-  var tasks = sections.map(function (sec) {
-    return _get(sec.url, SITE + '/', 6000).then(function (html) {
-      var out = [];
-      var seen = {};
-      var articles = html.match(/<article[^>]*>[\s\S]*?<\/article>/gi) || [];
-
-      for (var i = 0; i < articles.length; i++) {
-        var item = articles[i];
-        var linkMatch = item.match(/href=["']([^"']+)["']/i);
-        if (!linkMatch) continue;
-        var itemUrl = linkMatch[1];
-        if (seen[itemUrl]) continue;
-        seen[itemUrl] = 1;
-
-        var titleMatch = item.match(/<h2[^>]*itemprop=["']headline["'][^>]*>([\s\S]*?)<\/h2>/i)
-          || item.match(/title=["']([^"']+)["']/i);
-        var title = _cleanTitle(titleMatch ? titleMatch[1] : '');
-        if (!title) continue;
-
-        var imgMatch = item.match(/src=["']([^"']+)["']/i);
-        var cover = imgMatch ? imgMatch[1] : null;
-
-        out.push({
-          id: itemUrl,
-          title: title,
-          url: itemUrl,
-          cover: cover,
-          type: 'movie',
-          sourceId: SOURCE_ID
-        });
-      }
-      return { title: sec.title, items: out.slice(0, 24) };
-    }).catch(function () {
-      return { title: sec.title, items: [] };
-    });
-  });
-
-  return Promise.all(tasks).then(function (res) {
-    var valid = [];
-    for (var i = 0; i < res.length; i++) {
-      if (res[i].items && res[i].items.length > 0) valid.push(res[i]);
+    var updateItems = _parseArticles(bixboxes[1] || html);
+    if (updateItems.length > 0) {
+      out.push({ title: 'Update Terbaru', items: updateItems });
     }
-    return valid;
-  });
+
+    if (bixboxes.length > 2) {
+      var featuredItems = _parseArticles(bixboxes[2] || '');
+      if (featuredItems.length > 0) {
+        out.push({ title: 'Film & Drama Pilihan', items: featuredItems });
+      }
+    }
+
+    return out;
+  }).catch(function () { return []; });
 }
 
 // ── Detail & Episodes ────────────────────────────────────────────────────────
