@@ -136,6 +136,15 @@
       "lang": "en",
       "file": "providers/vidking.js",
       "nsfw": false
+    },
+    {
+      "id": "cinejoy",
+      "name": "Cinejoy",
+      "version": "1.0.0",
+      "type": "movie",
+      "lang": "en",
+      "file": "providers/cinejoy.js",
+      "nsfw": false
     }
   ]
 }
