@@ -24,7 +24,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/favicon-48.png',
     type: 'movie',
-    version: '1.0.3'
+    version: '1.0.4'
   };
 }
 
@@ -443,76 +443,78 @@ function getEpisodes(url, opts) {
 }
 
 // ── Stream Extraction ─────────────────────────────────────────────────────────
-function _extractStreamsAndSubtitles(serverName, dec) {
-  var sources = [];
-  var allSubtitles = [];
-  var seenUrls = {};
+function _normalizeLang(rawLang, url) {
+  var l = String(rawLang || '').toLowerCase().replace(/^\s+|\s+$/g, '');
+  var u = String(url || '').toLowerCase();
+  if (l === 'en' || l === 'eng' || u.indexOf('_eng_') !== -1) return { lang: 'en', label: 'English' };
+  if (l === 'id' || l === 'ind' || l === 'ina' || u.indexOf('_ind_') !== -1 || u.indexOf('_ina_') !== -1) return { lang: 'id', label: 'Indonesian' };
+  if (l === 'fr' || l === 'fre' || l === 'fra' || u.indexOf('_fre_') !== -1 || u.indexOf('_fra_') !== -1) return { lang: 'fr', label: 'French' };
+  if (l === 'es' || l === 'spa' || u.indexOf('_spa_') !== -1) return { lang: 'es', label: 'Spanish' };
+  if (l === 'de' || l === 'ger' || l === 'deu' || u.indexOf('_ger_') !== -1 || u.indexOf('_deu_') !== -1) return { lang: 'de', label: 'German' };
+  if (l === 'ja' || l === 'jpn' || u.indexOf('_jpn_') !== -1) return { lang: 'ja', label: 'Japanese' };
+  if (l === 'ko' || l === 'kor' || u.indexOf('_kor_') !== -1) return { lang: 'ko', label: 'Korean' };
+  if (l === 'zh' || l === 'chi' || u.indexOf('_chi_') !== -1) return { lang: 'zh', label: 'Chinese' };
+  if (l === 'pt' || l === 'por' || u.indexOf('_por_') !== -1) return { lang: 'pt', label: 'Portuguese' };
+  if (l === 'ar' || l === 'ara' || u.indexOf('_ara_') !== -1) return { lang: 'ar', label: 'Arabic' };
+  if (l === 'ru' || l === 'rus' || u.indexOf('_rus_') !== -1) return { lang: 'ru', label: 'Russian' };
+  return { lang: l || 'und', label: rawLang || 'Unknown' };
+}
 
-  if (!dec || !dec.data) return sources;
+function _extractServerPayload(serverName, dec) {
+  var rawStreams = [];
+  var rawCaptions = [];
+
+  if (!dec || !dec.data) return { serverName: serverName, streams: rawStreams, captions: rawCaptions };
   var streams = dec.data.stream;
-  if (!Array.isArray(streams)) return sources;
+  if (!Array.isArray(streams)) return { serverName: serverName, streams: rawStreams, captions: rawCaptions };
 
   for (var j = 0; j < streams.length; j++) {
     var st = streams[j];
     if (!st) continue;
 
-    // Collect subtitles
+    // Captions
     if (Array.isArray(st.captions)) {
       for (var c = 0; c < st.captions.length; c++) {
         var cap = st.captions[c];
-        if (cap && cap.url && !seenUrls[cap.url]) {
-          seenUrls[cap.url] = 1;
-          allSubtitles.push({
-            lang: cap.language || cap.lang || 'en',
-            label: cap.language || cap.lang || 'English',
-            url: cap.url
-          });
+        if (cap && cap.url) {
+          rawCaptions.push(cap);
         }
       }
     }
 
-    // Case 1: HLS playlist
+    // HLS playlist
     var m3u8Url = st.playlist || st.url;
-    if (m3u8Url && !seenUrls[m3u8Url]) {
-      seenUrls[m3u8Url] = 1;
-      var pathOnly = (m3u8Url || '').split('?')[0];
-      var is4k = /(?:[_\-\/]4k|2160p|uhd)/i.test(pathOnly) || (st.id && /4k/i.test(st.id));
-      sources.push({
+    if (m3u8Url) {
+      rawStreams.push({
         url: m3u8Url,
-        quality: is4k ? '2160p' : 'Auto',
-        container: 'hls',
-        headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
-        subtitles: allSubtitles,
-        label: 'Cinejoy - ' + serverName + ' (' + (is4k ? '4K HLS' : 'Master HLS') + ')'
+        type: 'hls',
+        id: st.id || ''
       });
     }
 
-    // Case 2: Multi-quality files (e.g. Canaias)
+    // Direct multi-quality files
     if (st.qualities && typeof st.qualities === 'object') {
       var qKeys = Object.keys(st.qualities);
       for (var q = 0; q < qKeys.length; q++) {
         var qKey = qKeys[q];
         var qObj = st.qualities[qKey];
-        if (qObj && qObj.url && !seenUrls[qObj.url] && /^https?:\/\//i.test(qObj.url)) {
-          seenUrls[qObj.url] = 1;
-          sources.push({
+        if (qObj && qObj.url && /^https?:\/\//i.test(qObj.url)) {
+          rawStreams.push({
             url: qObj.url,
+            type: qObj.type === 'mp4' ? 'mp4' : 'hls',
             quality: qKey + 'p',
-            container: qObj.type === 'mp4' ? 'mp4' : 'hls',
-            headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
-            subtitles: allSubtitles,
-            label: 'Cinejoy - ' + serverName + ' (' + qKey + 'p)'
+            id: st.id || ''
           });
         }
       }
     }
   }
 
-  var rank = { '2160p': 5, '1080p': 4, '720p': 3, '480p': 2, '360p': 1, 'Auto': 0 };
-  sources.sort(function (a, b) {
-    return (rank[b.quality] || 0) - (rank[a.quality] || 0);
-  });
-  return sources;
+  return {
+    serverName: serverName,
+    streams: rawStreams,
+    captions: rawCaptions
+  };
 }
 
 function _parseMasterPlaylist(masterUrl, serverName, subtitles) {
@@ -584,16 +586,16 @@ function getVideoSources(episodeUrl, opts) {
 
   var isFast = !!(opts && opts.fast);
 
-  function fetchServerStreams(serverName) {
+  function fetchServerData(serverName) {
     var reqUrl = BASE_API + '/?' + (isTv
       ? 'type=series&tmdb=' + encodeURIComponent(tmdbId) + '&season=' + encodeURIComponent(season) + '&episode=' + encodeURIComponent(episode) + '&server=' + encodeURIComponent(serverName)
       : 'type=movie&tmdb=' + encodeURIComponent(tmdbId) + '&server=' + encodeURIComponent(serverName));
 
     return fetch(ENC_DEC_API + '/enc-cinejoy?url=' + encodeURIComponent(reqUrl)).then(function (encRes) {
-      if (!encRes || !encRes.ok) return [];
+      if (!encRes || !encRes.ok) return { serverName: serverName, streams: [], captions: [] };
       return encRes.json().then(function (encJson) {
         if (!encJson || encJson.status !== 200 || !encJson.result || !encJson.result.data) {
-          return [];
+          return { serverName: serverName, streams: [], captions: [] };
         }
 
         var rawBody = _base64UrlToBytes(encJson.result.data);
@@ -610,13 +612,13 @@ function getVideoSources(episodeUrl, opts) {
           body: rawBody,
           responseType: 'arraybuffer'
         }).then(function (res) {
-          if (!res || !res.ok) return [];
+          if (!res || !res.ok) return { serverName: serverName, streams: [], captions: [] };
           var getBuf = typeof res.arrayBuffer === 'function'
             ? res.arrayBuffer()
             : Promise.resolve(res.bytes ? res.bytes() : (res.bodyB64 ? _base64ToBytes(res.bodyB64) : null));
 
           return getBuf.then(function (buf) {
-            if (!buf) return [];
+            if (!buf) return { serverName: serverName, streams: [], captions: [] };
             var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
             var decryptedObj = null;
 
@@ -633,7 +635,7 @@ function getVideoSources(episodeUrl, opts) {
             } catch (e) {}
 
             if (decryptedObj && decryptedObj.data) {
-              return _extractStreamsAndSubtitles(serverName, decryptedObj);
+              return _extractServerPayload(serverName, decryptedObj);
             }
 
             // Fallback to remote dec-cinejoy endpoint if local decryption didn't produce streams
@@ -645,84 +647,135 @@ function getVideoSources(episodeUrl, opts) {
                 state: state
               })
             }).then(function (decRes) {
-              if (!decRes || !decRes.ok) return [];
+              if (!decRes || !decRes.ok) return { serverName: serverName, streams: [], captions: [] };
               return decRes.json().then(function (decJson) {
                 if (decJson && decJson.status === 200 && decJson.result) {
-                  return _extractStreamsAndSubtitles(serverName, decJson.result);
+                  return _extractServerPayload(serverName, decJson.result);
                 }
-                return [];
+                return { serverName: serverName, streams: [], captions: [] };
               });
-            }).catch(function () { return []; });
+            }).catch(function () {
+              return { serverName: serverName, streams: [], captions: [] };
+            });
           });
         });
       });
     }).catch(function () {
-      return [];
+      return { serverName: serverName, streams: [], captions: [] };
     });
   }
 
-  // Solara provides fast muxed H.264/AAC streams with instant seeking.
-  // Lisbon provides 4K / backup streams.
-  var fetchJobs = isFast
-    ? [fetchServerStreams('Solara')]
-    : [fetchServerStreams('Solara'), fetchServerStreams('Lisbon')];
+  // All official Cinejoy/Shegu servers
+  var candidateServers = isFast
+    ? ['Solara', 'Nebula']
+    : ['Solara', 'Lisbon', 'Nebula', 'Athens', 'Castle', 'Joy', 'Sakura'];
 
-  return Promise.all(fetchJobs).then(function (results) {
-    var solaraBase = results[0] || [];
-    var lisbonBase = (!isFast && results[1]) ? results[1] : [];
+  var fetchJobs = candidateServers.map(function (s) {
+    return fetchServerData(s);
+  });
 
-    // Expand Solara HLS master playlist into discrete quality streams if available
-    var parsePromises = [];
-    for (var i = 0; i < solaraBase.length; i++) {
-      var s = solaraBase[i];
-      if (s.container === 'hls' && s.url) {
-        parsePromises.push(_parseMasterPlaylist(s.url, 'Solara', s.subtitles));
+  return Promise.all(fetchJobs).then(function (serverResults) {
+    // 1. Collect and deduplicate all subtitles across all returned servers
+    var allSubtitles = [];
+    var seenSubUrls = {};
+
+    for (var i = 0; i < serverResults.length; i++) {
+      var sr = serverResults[i];
+      if (!sr || !Array.isArray(sr.captions)) continue;
+      for (var c = 0; c < sr.captions.length; c++) {
+        var cap = sr.captions[c];
+        if (cap && cap.url && !seenSubUrls[cap.url]) {
+          seenSubUrls[cap.url] = 1;
+          var norm = _normalizeLang(cap.language || cap.lang, cap.url);
+          allSubtitles.push({
+            lang: norm.lang,
+            label: norm.label,
+            url: cap.url
+          });
+        }
       }
     }
 
-    return Promise.all(parsePromises).then(function (subListArray) {
-      var allSources = [];
-      var subRank = { '1080p': 4, '720p': 3, '480p': 2, '360p': 1 };
+    // 2. Build video sources
+    var masterParseJobs = [];
+    var baseSources = [];
+    var seenStreamUrls = {};
 
-      // 1. Solara discrete quality streams (1080p, 720p, etc.)
-      for (var k = 0; k < subListArray.length; k++) {
-        var subs = subListArray[k];
-        subs.sort(function (a, b) {
-          return (subRank[b.quality] || 0) - (subRank[a.quality] || 0);
-        });
-        for (var m = 0; m < subs.length; m++) {
-          allSources.push(subs[m]);
-        }
-      }
+    for (var j = 0; j < serverResults.length; j++) {
+      var resItem = serverResults[j];
+      if (!resItem || !Array.isArray(resItem.streams)) continue;
+      var sName = resItem.serverName;
 
-      // 2. Solara master playlist (Auto)
-      for (var j = 0; j < solaraBase.length; j++) {
-        allSources.push(solaraBase[j]);
-      }
+      for (var k = 0; k < resItem.streams.length; k++) {
+        var streamItem = resItem.streams[k];
+        if (!streamItem || !streamItem.url || seenStreamUrls[streamItem.url]) continue;
+        seenStreamUrls[streamItem.url] = 1;
 
-      // 3. Lisbon server streams (4K / Master)
-      for (var l = 0; l < lisbonBase.length; l++) {
-        allSources.push(lisbonBase[l]);
-      }
+        if (streamItem.type === 'hls') {
+          var pathOnly = streamItem.url.split('?')[0];
+          var is4k = /(?:[_\-\/]4k|2160p|uhd)/i.test(pathOnly) || (streamItem.id && /4k/i.test(streamItem.id));
 
-      if (allSources.length > 0) {
-        return allSources;
-      }
-
-      // Fallback to remaining servers sequentially if top servers return empty
-      var fallbacks = ['Nebula', 'Athens', 'Castle', 'Joy'];
-      function tryFallback(fIdx) {
-        if (fIdx >= fallbacks.length) {
-          return Promise.reject(new Error('Cinejoy: No playable stream sources found'));
-        }
-        return fetchServerStreams(fallbacks[fIdx]).then(function (fbSources) {
-          if (fbSources && fbSources.length > 0) {
-            return fbSources;
+          // Solara and Nebula have self-contained multiplexed HLS playlists that can be split into discrete resolutions
+          if (sName === 'Solara' || sName === 'Nebula') {
+            masterParseJobs.push(
+              _parseMasterPlaylist(streamItem.url, sName, allSubtitles)
+            );
           }
-          return tryFallback(fIdx + 1);
-        });
+
+          baseSources.push({
+            url: streamItem.url,
+            quality: is4k ? '2160p' : 'Auto',
+            container: 'hls',
+            headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
+            subtitles: allSubtitles,
+            label: 'Cinejoy - ' + sName + ' (' + (is4k ? '4K HLS' : 'Master HLS') + ')'
+          });
+        } else {
+          // Direct file (e.g. mp4)
+          baseSources.push({
+            url: streamItem.url,
+            quality: streamItem.quality || 'Auto',
+            container: streamItem.type || 'mp4',
+            headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
+            subtitles: allSubtitles,
+            label: 'Cinejoy - ' + sName + ' (' + (streamItem.quality || 'MP4') + ')'
+          });
+        }
       }
-      return tryFallback(0);
+    }
+
+    return Promise.all(masterParseJobs).then(function (discreteListArray) {
+      var discreteSources = [];
+      for (var d = 0; d < discreteListArray.length; d++) {
+        var dList = discreteListArray[d];
+        if (Array.isArray(dList)) {
+          for (var dl = 0; dl < dList.length; dl++) {
+            discreteSources.push(dList[dl]);
+          }
+        }
+      }
+
+      var allSources = discreteSources.concat(baseSources);
+
+      if (!allSources.length) {
+        return Promise.reject(new Error('Cinejoy: No playable stream sources found'));
+      }
+
+      var rank = { '2160p': 5, '1080p': 4, '720p': 3, '480p': 2, '360p': 1, 'Auto': 0 };
+      var serverPref = { 'Solara': 1, 'Nebula': 2, 'Lisbon': 3, 'Athens': 4, 'Castle': 5, 'Joy': 6, 'Sakura': 7 };
+
+      allSources.sort(function (a, b) {
+        var rDiff = (rank[b.quality] || 0) - (rank[a.quality] || 0);
+        if (rDiff !== 0) return rDiff;
+        var aMatch = a.label.match(/Cinejoy - ([A-Za-z]+)/);
+        var bMatch = b.label.match(/Cinejoy - ([A-Za-z]+)/);
+        var aPref = aMatch ? (serverPref[aMatch[1]] || 99) : 99;
+        var bPref = bMatch ? (serverPref[bMatch[1]] || 99) : 99;
+        return aPref - bPref;
+      });
+
+      return allSources;
     });
   });
 }
+
