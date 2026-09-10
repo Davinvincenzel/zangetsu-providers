@@ -20,7 +20,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/assets/icon/apple-icon-180x180.png',
     type: 'movie',
-    version: '1.0.0'
+    version: '1.0.1'
   };
 }
 
@@ -464,25 +464,15 @@ function getVideoSources(episodeUrl, opts) {
           }
         }
 
-        // Collect video sources
+        // Collect video sources (prefer direct discrete variants over master.m3u8 to ensure instant seek)
         for (var i = 0; i < results.length; i++) {
           var res = results[i];
           if (!res || !res.data) continue;
           var d = res.data;
 
-          if (d.playlist && !seenUrls[d.playlist]) {
-            seenUrls[d.playlist] = 1;
-            sources.push({
-              url: d.playlist,
-              quality: 'Auto',
-              container: 'hls',
-              headers: { 'User-Agent': UA },
-              subtitles: allSubtitles,
-              label: 'Vidking - ' + res.name + ' (Master HLS)'
-            });
-          }
+          var hasDirectSources = Array.isArray(d.sources) && d.sources.length > 0;
 
-          if (Array.isArray(d.sources)) {
+          if (hasDirectSources) {
             for (var s = 0; s < d.sources.length; s++) {
               var src = d.sources[s];
               if (src && src.url && !seenUrls[src.url]) {
@@ -492,12 +482,23 @@ function getVideoSources(episodeUrl, opts) {
                   url: src.url,
                   quality: qStr,
                   container: 'hls',
-                  headers: { 'User-Agent': UA },
+                  headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
                   subtitles: allSubtitles,
                   label: 'Vidking - ' + res.name + ' (' + qStr + ')'
                 });
               }
             }
+          } else if (d.playlist && !seenUrls[d.playlist]) {
+            // Fallback: master.m3u8 only if discrete variants are missing
+            seenUrls[d.playlist] = 1;
+            sources.push({
+              url: d.playlist,
+              quality: 'Auto',
+              container: 'hls',
+              headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
+              subtitles: allSubtitles,
+              label: 'Vidking - ' + res.name + ' (Auto HLS)'
+            });
           }
         }
 
@@ -505,7 +506,7 @@ function getVideoSources(episodeUrl, opts) {
           throw new Error('Vidking: No playable stream sources found');
         }
 
-        var rank = { '2160p': 5, '1080p': 4, '720p': 3, '480p': 2, 'Auto': 1 };
+        var rank = { '2160p': 5, '1080p': 4, '720p': 3, '480p': 2, 'Auto': 1, 'Auto HLS': 1 };
         sources.sort(function (a, b) {
           return (rank[b.quality] || 0) - (rank[a.quality] || 0);
         });
