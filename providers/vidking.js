@@ -20,7 +20,7 @@ function getInfo() {
     baseUrl: SITE,
     logo: SITE + '/assets/icon/apple-icon-180x180.png',
     type: 'movie',
-    version: '1.0.1'
+    version: '1.0.2'
   };
 }
 
@@ -423,8 +423,8 @@ function getVideoSources(episodeUrl, opts) {
         '&enc=2&seed=' + encodeURIComponent(seed);
 
       var endpoints = [
-        { name: 'Yoru', path: 'cdn/sources-with-title' },
-        { name: 'Breach', path: 'm4uhd/sources-with-title' }
+        { name: 'Breach', path: 'm4uhd/sources-with-title' },
+        { name: 'Yoru', path: 'cdn/sources-with-title' }
       ];
 
       var tasks = endpoints.map(function (ep) {
@@ -445,15 +445,17 @@ function getVideoSources(episodeUrl, opts) {
       return Promise.all(tasks).then(function (results) {
         var sources = [];
         var allSubtitles = [];
+        var seenSubUrls = {};
         var seenUrls = {};
 
-        // Collect subtitles first
+        // Collect subtitles first (deduplicated)
         for (var i = 0; i < results.length; i++) {
           var res = results[i];
           if (res && res.data && Array.isArray(res.data.subtitles)) {
             for (var k = 0; k < res.data.subtitles.length; k++) {
               var sub = res.data.subtitles[k];
-              if (sub && sub.url) {
+              if (sub && sub.url && !seenSubUrls[sub.url]) {
+                seenSubUrls[sub.url] = 1;
                 allSubtitles.push({
                   lang: sub.lang || sub.language || 'en',
                   language: sub.language || sub.lang || 'English',
@@ -477,27 +479,59 @@ function getVideoSources(episodeUrl, opts) {
               var src = d.sources[s];
               if (src && src.url && !seenUrls[src.url]) {
                 seenUrls[src.url] = 1;
-                var qStr = src.quality || 'HLS';
+                var qRaw = _trim(src.quality || 'HLS');
+                var qLower = qRaw.toLowerCase();
+                var qStr = qRaw;
+                var displayLabel = qRaw;
+
+                if (res.name === 'Breach') {
+                  // Breach (m4uhd) streams are 1080p TS; assign 1080p so player recognizes it as full HD
+                  qStr = '1080p';
+                  displayLabel = '1080p';
+                } else if (qLower === '2160p' || qLower.indexOf('4k') !== -1 || qLower.indexOf('uhd') !== -1) {
+                  // Label 4K so standard auto-selection defaults to 1080p (prevents 13MB chunk seek stalls),
+                  // while users who explicitly set 4K still match via resolutionPx('4K') -> 2160
+                  qStr = '4K';
+                  displayLabel = '4K';
+                } else if (qLower === '1080p') {
+                  qStr = '1080p';
+                  displayLabel = '1080p';
+                } else if (qLower === '720p') {
+                  qStr = '720p';
+                  displayLabel = '720p';
+                } else if (qLower === '480p') {
+                  qStr = '480p';
+                  displayLabel = '480p';
+                } else if (qLower === '360p') {
+                  qStr = '360p';
+                  displayLabel = '360p';
+                }
+
                 sources.push({
                   url: src.url,
                   quality: qStr,
                   container: 'hls',
                   headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
                   subtitles: allSubtitles,
-                  label: 'Vidking - ' + res.name + ' (' + qStr + ')'
+                  serverName: res.name,
+                  label: 'Vidking - ' + res.name + ' (' + displayLabel + ')'
                 });
               }
             }
           } else if (d.playlist && !seenUrls[d.playlist]) {
             // Fallback: master.m3u8 only if discrete variants are missing
             seenUrls[d.playlist] = 1;
+            var isBreach = res.name === 'Breach';
+            var qFallback = isBreach ? '1080p' : 'Auto';
+            var labelFallback = isBreach ? '1080p' : 'Auto HLS';
             sources.push({
               url: d.playlist,
-              quality: 'Auto',
+              quality: qFallback,
               container: 'hls',
               headers: { 'User-Agent': UA, 'Referer': SITE + '/' },
               subtitles: allSubtitles,
-              label: 'Vidking - ' + res.name + ' (Auto HLS)'
+              serverName: res.name,
+              label: 'Vidking - ' + res.name + ' (' + labelFallback + ')'
             });
           }
         }
@@ -506,9 +540,23 @@ function getVideoSources(episodeUrl, opts) {
           throw new Error('Vidking: No playable stream sources found');
         }
 
-        var rank = { '2160p': 5, '1080p': 4, '720p': 3, '480p': 2, 'Auto': 1, 'Auto HLS': 1 };
+        var rank = {
+          '1080p': 6,
+          '720p': 5,
+          '480p': 4,
+          '360p': 3,
+          '4K': 2,
+          'Auto': 1,
+          'Auto HLS': 1
+        };
+        var serverPref = { 'Breach': 1, 'Yoru': 2 };
+
         sources.sort(function (a, b) {
-          return (rank[b.quality] || 0) - (rank[a.quality] || 0);
+          var rDiff = (rank[b.quality] || 0) - (rank[a.quality] || 0);
+          if (rDiff !== 0) return rDiff;
+          var aPref = a.serverName ? (serverPref[a.serverName] || 99) : 99;
+          var bPref = b.serverName ? (serverPref[b.serverName] || 99) : 99;
+          return aPref - bPref;
         });
 
         return sources;
